@@ -1,0 +1,2 @@
+# Litweb emits LF output, and byte-for-byte fixtures must retain LF on Windows.
+* text=auto eol=lf

@@ -1,0 +1,965 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Main
+
+@s One Command, One Result
+
+Output ended with a list of complete files waiting to be installed. Main
+connects that library work to the command a person types. We will follow one
+command all the way through:
+
+```text
+lw -t -odir generated greeting.lit
+```
+
+The four arguments after `lw` say:
+
+- `-t` selects tangled code without a woven reading copy;
+- `-odir` says that the next argument names the output directory;
+- `generated` is that directory; and
+- `greeting.lit` is the input.
+
+The command uses the `Greeting` source followed throughout this book. Its
+final `Greeting line` contains `Good morning` and `from Litweb`, so success
+has this exact visible result:
+
+```text
+filesystem
+|-- greeting.lit                  unchanged
+`-- generated/
+    `-- hello.txt
+        `-- "Good morning\nfrom Litweb\n"
+
+standard output   empty
+standard error    empty
+exit status       0
+```
+
+Standard output and standard error are the process's two text streams. The
+exit status is a small number returned to the shell: zero means that the
+requested action succeeded. Nothing is printed here because the command
+needed no warning or explanation after writing the file.
+
+@s Four Tokens Become One Value
+
+Main does not let unrelated parts of the program inspect raw argument text.
+The argument parser reads the tokens once and records their meaning. For this
+command, its changing state is:
+
+```text
+start
+|-- input             none
+|-- output directory  none
+`-- mode              none
+
+after "-t"
+`-- mode              TangleOnly
+
+after "-odir" "generated"
+`-- output directory  "generated"
+
+after "greeting.lit"
+`-- input             "greeting.lit"
+```
+
+When the scan ends, the parser supplies the defaults for every choice that was
+not mentioned and returns this complete value:
+
+```text
+Action::Run
+`-- RunConfig
+    |-- input                    "greeting.lit"
+    |-- output_directory         "generated"
+    |-- mode                     TangleOnly
+    |-- weave_format             Html
+    |-- tangle_headers           true
+    |-- tangle_block_separators  true
+    |-- identifier_index         true
+    |-- latex_font_size          TwelvePoint
+    |-- latex_chapter_opening    Right
+    `-- color_scheme             None
+```
+
+An **action** is either an immediate answer or a request to process a file.
+Help and version requests need no invented input, so they have their own
+variants. A run carries every choice in one @code{RunConfig}.
+
+--- Action enum
+/// An action selected from command-line arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Print command help without processing an input.
+    Help,
+    /// Print the package version without processing an input.
+    Version,
+    /// Process one input with the completed configuration.
+    Run(RunConfig),
+}
+
+/// The output planners selected for one run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunMode {
+    /// Plan both tangled code and the selected woven format.
+    Default,
+    /// Plan only tangled code.
+    TangleOnly,
+    /// Plan only the selected woven format.
+    WeaveOnly,
+}
+
+/// The representation produced by the weaving stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeaveFormat {
+    /// Produce linked offline HTML, the default.
+    Html,
+    /// Produce one LuaLaTeX document and its packaged style.
+    Latex,
+}
+
+/// Every choice needed to process one input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunConfig {
+    /// The `.lit` chapter or book manifest to read.
+    pub input: PathBuf,
+    /// The output directory, or `.` when no directory option was supplied.
+    pub output_directory: PathBuf,
+    /// Which output planners run; `Default` means both.
+    pub mode: RunMode,
+    /// Which woven representation to produce; HTML is the default.
+    pub weave_format: WeaveFormat,
+    /// Whether Tangler emits generated block-name comments; normally true.
+    pub tangle_headers: bool,
+    /// Whether Tangler separates adjacent expanded blocks; normally true.
+    pub tangle_block_separators: bool,
+    /// Whether woven output includes a target-language identifier index; normally true.
+    pub identifier_index: bool,
+    /// The base font size for LaTeX output; normally 12 points.
+    pub latex_font_size: LatexFontSize,
+    /// The page side on which major LaTeX book chapters begin; normally right.
+    pub latex_chapter_opening: LatexChapterOpening,
+    /// A command-line override; `None` keeps document/default behavior and
+    /// `"none"` disables highlighting.
+    pub color_scheme: Option<PathBuf>,
+}
+---
+
+@s Defaults Record Positive Guarantees
+
+The scanner uses @code{None} for a mode only while it has not yet seen `-t` or
+`-w`. A finished configuration instead uses @code{RunMode::Default} to mean
+“plan both code and the selected woven format.” HTML is that format unless
+`--format latex` selects LaTeX. Thus `lw greeting.lit` has a real mode, not a
+missing one, and uses the current directory `.` when no output directory was
+given.
+
+Negative options become positive guarantees. Unless the command contains
+`--no-headers`, @code{tangle_headers} is true. The block-separator and
+identifier-index fields work the same way. This makes later code ask directly
+whether it should produce something rather than repeatedly reason about a
+negative flag.
+
+The color choice has a separate distinction. @code{None} means that the
+command line supplied no override, so the HTML renderer may use the
+document's choice or its own default. `--no-highlight` becomes `Some("none")`,
+an explicit override that disables highlighting. `--colorscheme dark`
+becomes `Some("dark")`. LaTeX has no syntax-highlighting choice, so either
+command-line option is rejected with `--format latex`.
+
+The LaTeX choices work in the other direction. Font size defaults to 12
+points, while `--font-size 10pt` and `--font-size 11pt` select the smaller
+sizes offered by LaTeX's standard document classes. Major book chapters open
+on right pages by default; `--chapter-opening left` selects the bound-book
+alternative. Supplying either option without `--format latex` is an error.
+These fields remain in a tangle-only configuration because one type describes
+all three run modes, even when a selected planner will not read every field.
+
+@s The Argument Parser Has Three Stages
+
+The public parser turns operating-system strings into one action. It has three
+ordinary stages: initialize the optional state, scan the tokens, and validate
+the result while filling defaults.
+
+--- Parse arguments function
+/// Converts operating-system arguments into one requested action.
+///
+/// Before `--`, every argument beginning with an ASCII hyphen is treated as
+/// option-shaped even when the complete value is not valid UTF-8. After `--`,
+/// all remaining arguments are positional.
+pub fn parse_args<I>(args: I) -> Result<Action, CliError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    @{Initialize argument state}
+    @{Scan command-line arguments}
+    @{Build the run configuration}
+}
+---
+
+The initial values distinguish “not mentioned yet” from a completed default.
+Separate booleans remember negative options so repeated uses can be diagnosed.
+
+--- Initialize argument state
+let mut args = args.into_iter();
+let mut input = None;
+let mut output_directory = None;
+let mut mode = None;
+let mut weave_format = None;
+let mut no_headers = false;
+let mut no_block_separators = false;
+let mut no_index = false;
+let mut latex_font_size = None;
+let mut latex_chapter_opening = None;
+let mut color_scheme = None;
+let mut no_highlight = false;
+let mut options_ended = false;
+---
+
+@s Reading Options, Values, and the Input
+
+The loop recognizes exact long and short option names. A value-taking option
+consumes the next operating-system argument; `--format` accepts exactly
+`html` or `latex`; modes and negative switches update one piece of state; and
+the first positional argument becomes the input. Help and version already
+form complete actions, so the parser can return them immediately.
+
+For the opening command, the `-t` branch sets @code{mode}, the `-odir` branch
+consumes `generated`, and the final positional branch stores
+`greeting.lit`. The other branches protect the same state from repeated or
+conflicting choices.
+
+--- Scan command-line arguments
+while let Some(arg) = args.next() {
+    if options_ended {
+        if input.is_some() {
+            return Err(CliError::MultipleInputs);
+        }
+        input = Some(PathBuf::from(arg));
+        continue;
+    }
+    if arg == OsStr::new("--") {
+        options_ended = true;
+        continue;
+    }
+
+    match arg.to_str() {
+        Some("--help" | "-h") => return Ok(Action::Help),
+        Some("--version" | "-v") => return Ok(Action::Version),
+        Some("--format") => {
+            if weave_format.is_some() {
+                return Err(CliError::RepeatedOption("--format"));
+            }
+            let value = args
+                .next()
+                .ok_or(CliError::MissingOptionValue("--format"))?;
+            if starts_with_hyphen(&value) {
+                return Err(CliError::MissingOptionValue("--format"));
+            }
+            weave_format = Some(match value.to_str() {
+                Some("html") => WeaveFormat::Html,
+                Some("latex") => WeaveFormat::Latex,
+                _ => return Err(CliError::UnknownFormat(value)),
+            });
+        }
+        Some("--font-size") => {
+            if latex_font_size.is_some() {
+                return Err(CliError::RepeatedOption("--font-size"));
+            }
+            let value = args
+                .next()
+                .ok_or(CliError::MissingOptionValue("--font-size"))?;
+            if starts_with_hyphen(&value) {
+                return Err(CliError::MissingOptionValue("--font-size"));
+            }
+            latex_font_size = Some(match value.to_str() {
+                Some("10pt") => LatexFontSize::TenPoint,
+                Some("11pt") => LatexFontSize::ElevenPoint,
+                Some("12pt") => LatexFontSize::TwelvePoint,
+                _ => return Err(CliError::UnknownFontSize(value)),
+            });
+        }
+        Some("--chapter-opening") => {
+            if latex_chapter_opening.is_some() {
+                return Err(CliError::RepeatedOption("--chapter-opening"));
+            }
+            let value = args
+                .next()
+                .ok_or(CliError::MissingOptionValue("--chapter-opening"))?;
+            if starts_with_hyphen(&value) {
+                return Err(CliError::MissingOptionValue("--chapter-opening"));
+            }
+            latex_chapter_opening = Some(match value.to_str() {
+                Some("right") => LatexChapterOpening::Right,
+                Some("left") => LatexChapterOpening::Left,
+                _ => return Err(CliError::UnknownChapterOpening(value)),
+            });
+        }
+        Some("--no-headers") => {
+            if no_headers {
+                return Err(CliError::RepeatedOption("--no-headers"));
+            }
+            no_headers = true;
+        }
+        Some("--no-block-separators") => {
+            if no_block_separators {
+                return Err(CliError::RepeatedOption("--no-block-separators"));
+            }
+            no_block_separators = true;
+        }
+        Some("--no-highlight") => {
+            if no_highlight {
+                return Err(CliError::RepeatedOption("--no-highlight"));
+            }
+            if color_scheme.is_some() {
+                return Err(CliError::ConflictingHighlightOptions);
+            }
+            no_highlight = true;
+        }
+        Some("--colorscheme") => {
+            if color_scheme.is_some() {
+                return Err(CliError::RepeatedOption("--colorscheme"));
+            }
+            if no_highlight {
+                return Err(CliError::ConflictingHighlightOptions);
+            }
+            let scheme = args
+                .next()
+                .ok_or(CliError::MissingOptionValue("--colorscheme"))?;
+            if starts_with_hyphen(&scheme) {
+                return Err(CliError::MissingOptionValue("--colorscheme"));
+            }
+            color_scheme = Some(scheme);
+        }
+        Some("--no-index") => {
+            if no_index {
+                return Err(CliError::RepeatedOption("--no-index"));
+            }
+            no_index = true;
+        }
+        Some("--tangle" | "-t") => match mode {
+            None => mode = Some(RunMode::TangleOnly),
+            Some(RunMode::TangleOnly) => {
+                return Err(CliError::RepeatedOption("--tangle"));
+            }
+            Some(RunMode::WeaveOnly | RunMode::Default) => {
+                return Err(CliError::ConflictingOptions);
+            }
+        },
+        Some("--weave" | "-w") => match mode {
+            None => mode = Some(RunMode::WeaveOnly),
+            Some(RunMode::WeaveOnly) => {
+                return Err(CliError::RepeatedOption("--weave"));
+            }
+            Some(RunMode::TangleOnly | RunMode::Default) => {
+                return Err(CliError::ConflictingOptions);
+            }
+        },
+        Some("--out-dir" | "-odir") => {
+            if output_directory.is_some() {
+                return Err(CliError::RepeatedOption("--out-dir"));
+            }
+            let directory = args
+                .next()
+                .ok_or(CliError::MissingOptionValue("--out-dir"))?;
+            if starts_with_hyphen(&directory) {
+                return Err(CliError::MissingOptionValue("--out-dir"));
+            }
+            output_directory = Some(directory);
+        }
+        _ if starts_with_hyphen(&arg) => {
+            return Err(CliError::UnsupportedOption(arg));
+        }
+        _ if input.is_some() => return Err(CliError::MultipleInputs),
+        _ => input = Some(PathBuf::from(arg)),
+    }
+}
+---
+
+@s Ending Options with a Marker
+
+Before the exact standalone `--`, an argument beginning with the ordinary
+ASCII hyphen is option-shaped. If it is not one of the supported options, it
+cannot silently become the input. This rule also applies when later bytes in
+the operating-system string are not valid UTF-8.
+
+Some real filenames begin with a hyphen. The conventional marker ends option
+recognition:
+
+```text
+lw -t -- -draft.lit
+```
+
+Here `-t` is still an option, `--` is discarded as command syntax, and
+`-draft.lit` is positional input. Every later argument is positional, so the
+one-input rule still applies. A marker immediately after `--out-dir`,
+`--chapter-opening`, `--colorscheme`, `--font-size`, or `--format` is not a
+value; those forms report that the option is missing its value.
+
+The helper needs only the leading ASCII character. Its lossy view is never
+stored: the original @code{OsString} remains available for paths and
+diagnostics.
+
+--- Recognize option-shaped arguments
+fn starts_with_hyphen(argument: &OsStr) -> bool {
+    argument.to_string_lossy().starts_with('-')
+}
+---
+
+@s Completing the Configuration
+
+After the loop, a missing input is an error. Otherwise, the last stage fills
+the current-directory and both-planners defaults, changes negative switches
+into positive fields, and returns @code{Action::Run}. For the opening command,
+these expressions produce the complete value shown earlier.
+
+--- Build the run configuration
+let weave_format = weave_format.unwrap_or(WeaveFormat::Html);
+if weave_format == WeaveFormat::Latex {
+    if color_scheme.is_some() {
+        return Err(CliError::IncompatibleFormatOption("--colorscheme"));
+    }
+    if no_highlight {
+        return Err(CliError::IncompatibleFormatOption("--no-highlight"));
+    }
+} else {
+    if latex_font_size.is_some() {
+        return Err(CliError::FontSizeRequiresLatex);
+    }
+    if latex_chapter_opening.is_some() {
+        return Err(CliError::ChapterOpeningRequiresLatex);
+    }
+}
+
+Ok(Action::Run(RunConfig {
+    input: input.ok_or(CliError::MissingInput)?,
+    output_directory: output_directory
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".")),
+    mode: mode.unwrap_or(RunMode::Default),
+    weave_format,
+    tangle_headers: !no_headers,
+    tangle_block_separators: !no_block_separators,
+    identifier_index: !no_index,
+    latex_font_size: latex_font_size.unwrap_or_default(),
+    latex_chapter_opening: latex_chapter_opening.unwrap_or_default(),
+    color_scheme: if no_highlight {
+        Some(PathBuf::from("none"))
+    } else {
+        color_scheme.map(PathBuf::from)
+    },
+}))
+---
+
+@s Choosing a Process Result
+
+The executable asks the parser for one @code{Action}, then makes one small
+decision:
+
+```text
+parse arguments
+|-- Help             print help on standard output, return 0
+|-- Version          print version on standard output, return 0
+|-- Run(config)      call run_litweb
+|   |-- success      print warnings on standard error, return 0
+|   `-- failure      report RunError on standard error, return 1
+`-- CliError         report argument error on standard error, return 2
+```
+
+Help and version are requested answers, so they use standard output.
+Diagnostics use standard error. The distinct nonzero statuses let a script
+distinguish invalid invocation syntax from a valid run that failed while
+reading, planning, or writing.
+
+--- Main function
+fn main() -> ExitCode {
+    match parse_args(env::args_os().skip(1)) {
+        Ok(Action::Help) => {
+            print!("{HELP_TEXT}");
+            ExitCode::SUCCESS
+        }
+        Ok(Action::Version) => {
+            println!("Litweb version {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Ok(Action::Run(config)) => match run_litweb(config) {
+            Ok(warnings) => {
+                for warning in warnings {
+                    eprintln!("{warning}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                error.report();
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+---
+
+@s Help Describes the Same Interface
+
+The help action prints library data rather than duplicating option text in the
+binary. Its usage line includes the optional end-of-options marker, and its
+remaining lines describe only implemented behavior.
+
+--- Help text
+pub const HELP_TEXT: &str = "\
+Litweb: Literate Programming System
+
+Usage: lw [options] [--] <input>
+
+Use -- before an input whose name begins with -.
+
+Options:
+--tangle     -t         Only generate code files
+--weave      -w         Only generate the selected woven format
+--format FORMAT         Select html (default) or latex output
+--font-size SIZE        Set LaTeX text to 10pt, 11pt, or 12pt (default)
+--chapter-opening SIDE  Start LaTeX book chapters on right (default) or left
+--no-headers            Do not add block-name comments to code
+--no-block-separators   Do not separate adjacent expanded blocks
+--no-index              Do not generate identifier indexes
+--colorscheme SCHEME    Select an HTML highlighting color scheme
+--no-highlight          Do not syntax-highlight HTML target code
+--out-dir    -odir DIR  Put generated files in DIR
+--help       -h         Show this help text
+--version    -v         Show the version number
+";
+---
+
+@s Running the Successful Configuration
+
+The opening @code{RunConfig} now enters the pipeline. Main coordinates three
+stages without reimplementing any earlier chapter:
+
+```text
+RunConfig
+`-- input "greeting.lit", mode TangleOnly, output "generated"
+
+Program
+`-- parsed "A Greeting" source
+
+planned outputs
+`-- "hello.txt" = "Good morning\nfrom Litweb\n"
+
+protected inputs
+`-- "greeting.lit"
+
+Output
+`-- install "generated/hello.txt"
+```
+
+The outer function makes those three steps visible. All requested files
+remain in memory until loading and planning have succeeded.
+
+--- Run Litweb
+fn run_litweb(config: RunConfig) -> Result<Vec<TangleWarning>, RunError> {
+    @{Load one source or a book}
+    @{Plan the requested outputs}
+    @{Protect inputs and write outputs}
+}
+---
+
+@s Loading the Program
+
+Main reads bytes once so Parser owns UTF-8 validation. An exact standalone
+`@book` marker sends those bytes to Book; every other input is parsed as one
+chapter. Both branches produce the uniform @code{Program} used by later
+stages. `greeting.lit` takes the one-chapter branch.
+
+--- Load one source or a book
+let source = fs::read(&config.input).map_err(|error| RunError::Read {
+    path: config.input.clone(),
+    error: error.kind(),
+})?;
+let program = if is_book_manifest(&source) {
+    load_book_bytes(&config.input, &source).map_err(RunError::Book)?
+} else {
+    parse_bytes(config.input.to_string_lossy(), &source).map_err(RunError::Parse)?
+};
+---
+
+@s Planning Before Writing
+
+The tangle-only configuration asks Tangler for one
+@code{PlannedOutput}. Its relative path is `hello.txt`, and its bytes are the
+two final greeting lines. The bytes are still discardable; Output has not yet
+created `generated`.
+
+The general code also contains the other modes. Default mode asks Tangler and
+the selected HTML or LaTeX renderer to append proposals to one vector.
+Weave-only mode skips Tangler. Combining the proposals before Output's
+preflight ensures that a code root and a woven file or packaged asset cannot
+silently select the same destination.
+
+--- Plan the requested outputs
+let mut outputs = Vec::<PlannedOutput>::new();
+let mut warnings = Vec::new();
+
+if config.mode != RunMode::WeaveOnly {
+    let plan = plan_tangle_with_options(
+        &program,
+        TangleOptions {
+            headers: config.tangle_headers,
+            block_separators: config.tangle_block_separators,
+        },
+    )
+    .map_err(RunError::Tangle)?;
+    outputs.extend(plan.outputs);
+    warnings = plan.warnings;
+}
+if config.mode != RunMode::TangleOnly {
+    match config.weave_format {
+        WeaveFormat::Html => {
+            let plan = plan_weave_with_options(
+                &program,
+                WeaveOptions {
+                    identifier_index: config.identifier_index,
+                    color_scheme: config.color_scheme.clone(),
+                },
+            )
+            .map_err(RunError::Weave)?;
+            outputs.extend(plan.outputs);
+        }
+        WeaveFormat::Latex => {
+            let plan = plan_latex_with_options(
+                &program,
+                LatexOptions {
+                    identifier_index: config.identifier_index,
+                    font_size: config.latex_font_size,
+                    chapter_opening: config.latex_chapter_opening,
+                },
+            )
+            .map_err(RunError::Latex)?;
+            outputs.extend(plan.outputs);
+        }
+    }
+}
+---
+
+@s Protecting Sources and Installing the Plan
+
+For one chapter, Main protects the input path and calls Output once with the
+complete proposal. The opening run therefore protects `greeting.lit` while
+installing `generated/hello.txt`. @code{Ok(warnings)} means that every
+requested file was installed and any nonfatal Tangler warnings are ready for
+the process boundary. This example has none.
+
+A book changes only the source list. Main protects its manifest and every
+loaded chapter, resolving chapter paths relative to the manifest. Resolution,
+Tangler, the selected renderer, and Output otherwise operate on the same
+book-wide @code{Program} and combined proposal. All three run modes share
+this rule.
+
+--- Protect inputs and write outputs
+let mut inputs = vec![config.input.clone()];
+if program.is_book() {
+    let directory = config
+        .input
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(""));
+    inputs.extend(program.chapters.iter().map(|chapter| {
+        directory.join(
+            &chapter
+                .book
+                .as_ref()
+                .expect("a loaded book chapter has book metadata")
+                .source_path,
+        )
+    }));
+}
+write_planned_outputs_protecting(&outputs, &config.output_directory, &inputs)
+    .map_err(RunError::Output)?;
+Ok(warnings)
+---
+
+@s Successful Warnings
+
+Tangler can finish successfully with a warning. A document with no code roots,
+for example, can still produce a valid woven reading copy.
+@code{run_litweb} therefore returns warnings beside success; @code{main}
+prints each one on standard error without changing status 0. An error instead
+means that the requested run did not reach its success postcondition.
+
+@s Two Kinds of Failure
+
+The process distinguishes failures by when they occur:
+
+```text
+CliError
+`-- the arguments never formed an action; no input was read
+
+RunError
+`-- a valid RunConfig failed while reading, planning, or writing
+```
+
+The argument error retains an offending @code{OsString} when there is one.
+Paths need not be valid UTF-8 merely to pass through the command boundary.
+Missing, repeated, conflicting, and unsupported choices remain structured
+values; their straightforward display arms provide the user-facing sentence.
+
+--- CLI error
+/// A problem found while converting command-line arguments into an action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CliError {
+    MissingInput,
+    MultipleInputs,
+    MissingOptionValue(&'static str),
+    RepeatedOption(&'static str),
+    ConflictingOptions,
+    ConflictingHighlightOptions,
+    UnknownFormat(OsString),
+    UnknownFontSize(OsString),
+    UnknownChapterOpening(OsString),
+    FontSizeRequiresLatex,
+    ChapterOpeningRequiresLatex,
+    IncompatibleFormatOption(&'static str),
+    UnsupportedOption(OsString),
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingInput => f.write_str("no input file provided"),
+            Self::MultipleInputs => f.write_str("only one input file is supported"),
+            Self::MissingOptionValue(option) => {
+                write!(f, "option {option} requires a value")
+            }
+            Self::RepeatedOption(option) => {
+                write!(f, "option {option} was provided more than once")
+            }
+            Self::ConflictingOptions => {
+                f.write_str("options --tangle and --weave cannot be used together")
+            }
+            Self::ConflictingHighlightOptions => f.write_str(
+                "options --colorscheme and --no-highlight cannot be used together",
+            ),
+            Self::UnknownFormat(format) => write!(
+                f,
+                "unknown woven format {}; expected html or latex",
+                format.to_string_lossy()
+            ),
+            Self::UnknownFontSize(size) => write!(
+                f,
+                "unknown LaTeX font size {}; expected 10pt, 11pt, or 12pt",
+                size.to_string_lossy()
+            ),
+            Self::FontSizeRequiresLatex => {
+                f.write_str("option --font-size requires --format latex")
+            }
+            Self::UnknownChapterOpening(opening) => write!(
+                f,
+                "unknown LaTeX chapter opening {}; expected right or left",
+                opening.to_string_lossy()
+            ),
+            Self::ChapterOpeningRequiresLatex => {
+                f.write_str("option --chapter-opening requires --format latex")
+            }
+            Self::IncompatibleFormatOption(option) => {
+                write!(f, "option {option} cannot be used with --format latex")
+            }
+            Self::UnsupportedOption(option) => {
+                write!(f, "unsupported option: {}", option.to_string_lossy())
+            }
+        }
+    }
+}
+
+impl std::error::Error for CliError {}
+---
+
+@s Operational Failures Stay Structured
+
+@code{RunError} records which pipeline boundary failed. Parser, Book,
+Resolver, Tangler, and the HTML and LaTeX planners can return several
+source-ordered diagnostics; Output returns one error for the failed proposal
+or filesystem action. These values remain structured until the executable
+prints them.
+
+--- Operational run errors
+enum RunError {
+    Read { path: PathBuf, error: io::ErrorKind },
+    Parse(ParseErrors),
+    Book(BookErrors),
+    Tangle(PlanError),
+    Weave(WeavePlanError),
+    Latex(LatexPlanError),
+    Output(OutputError),
+}
+---
+
+The reporter expands each aggregate in its stable order. This is terminal
+policy, not a second error representation inside the library.
+
+--- Report an operational error
+impl RunError {
+    fn report(&self) {
+        match self {
+            Self::Read { path, error } => {
+                eprintln!("{}: error: cannot read input: {error}", path.display());
+            }
+            Self::Parse(errors) => {
+                for error in errors.as_slice() {
+                    eprintln!("{error}");
+                }
+            }
+            Self::Book(errors) => {
+                for error in errors.as_slice() {
+                    eprintln!("{error}");
+                }
+            }
+            Self::Tangle(PlanError::Resolution(errors))
+            | Self::Weave(WeavePlanError::Resolution(errors))
+            | Self::Latex(LatexPlanError::Resolution(errors)) => {
+                for error in errors.as_slice() {
+                    eprintln!("{error}");
+                }
+            }
+            Self::Tangle(PlanError::Expansion(errors)) => {
+                for error in errors.as_slice() {
+                    eprintln!("{error}");
+                }
+            }
+            Self::Weave(WeavePlanError::Weave(errors)) => {
+                for error in errors.as_slice() {
+                    eprintln!("{error}");
+                }
+            }
+            Self::Latex(LatexPlanError::Latex(errors)) => {
+                for error in errors.as_slice() {
+                    eprintln!("{error}");
+                }
+            }
+            Self::Output(error) => eprintln!("{error}"),
+        }
+    }
+}
+---
+
+@s Three Generated Modules
+
+The values and operations are now familiar enough to place their Rust module
+boundaries.
+
+@code{src/config.rs} is reusable library code. It exposes the help text,
+typed actions and errors, and argument parser without printing anything or
+reading a file.
+
+--- src/config.rs
+@{Configuration imports}
+@{Help text}
+@{Action enum}
+@{CLI error}
+@{Recognize option-shaped arguments}
+@{Parse arguments function}
+---
+
+Its dependencies preserve operating-system arguments, format structured
+errors, and store paths.
+
+--- Configuration imports
+use std::ffi::{OsStr, OsString};
+use std::fmt;
+use std::path::PathBuf;
+
+use crate::latex::{LatexChapterOpening, LatexFontSize};
+---
+
+@code{src/main.rs} owns process I/O, exit status, stage selection, and
+reporting. Its root stays thin because all transformations and filesystem
+rules belong to library modules.
+
+--- src/main.rs
+@{Main imports}
+@{Main function}
+@{Operational run errors}
+@{Report an operational error}
+@{Run Litweb}
+---
+
+The imports show those boundaries directly: standard-library process
+facilities surround the public Litweb stages coordinated by the binary.
+
+--- Main imports
+use std::env;
+use std::fs;
+use std::io;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use litweb::book::{BookErrors, is_book_manifest, load_book_bytes};
+use litweb::config::{Action, HELP_TEXT, RunConfig, RunMode, WeaveFormat, parse_args};
+use litweb::latex::{LatexOptions, LatexPlanError, plan_latex_with_options};
+use litweb::output::{OutputError, PlannedOutput, write_planned_outputs_protecting};
+use litweb::parser::{ParseErrors, parse_bytes};
+use litweb::tangler::{
+    PlanError, TangleOptions, TangleWarning, plan_tangle_with_options,
+};
+use litweb::weaver::{WeaveOptions, WeavePlanError, plan_weave_with_options};
+---
+
+Finally, @code{src/lib.rs} exposes the stages that a Rust caller can use
+without going through the terminal program. Shared implementation helpers
+remain private or narrowly exposed.
+
+--- src/lib.rs
+//! A modern literate programming system.
+//!
+//! The library parses, tangles, and weaves single-file `.lit` input and
+//! explicit book manifests containing ordered chapters. Books resolve and
+//! tangle as one program and weave into navigable multi-page HTML or one
+//! LuaLaTeX document.
+//! Production implementation is maintained in canonical `.lit` files under
+//! `lit/`; committed modules under `src/` are their generated, formatted form.
+//! Ordinary Cargo builds compile those committed modules and never regenerate
+//! them implicitly.
+
+pub mod book;
+pub mod config;
+pub mod identifier;
+mod inline;
+pub mod latex;
+pub mod output;
+pub mod parser;
+mod prose;
+pub mod resolver;
+pub mod tangler;
+pub mod util;
+pub mod weaver;
+mod woven;
+---
+
+@s From Arguments to Files
+
+The complete command can now be read as one chain:
+
+```text
+operating-system arguments
+`-- Action::Run(RunConfig)
+    `-- read one source or a book
+        `-- Program
+            |-- Tangler           -> planned code
+            `-- selected renderer -> planned HTML or LaTeX and assets
+
+combined PlannedOutput list
+`-- Output -> filesystem
+
+process result
+|-- warnings or errors on standard error
+`-- exit status for the calling shell
+```
+
+The opening `-t` command skips the woven-renderer branch. Its one planned file
+becomes `generated/hello.txt`, both terminal streams remain empty, and the
+shell receives status 0. Default mode follows both planning branches before
+the one Output call, while weave-only mode skips Tangler.
+
+Each earlier chapter owns one transformation or invariant. Main only turns
+arguments into typed choices, connects those already-understood stages, and
+reports their result. That is how one readable `.lit` source becomes ordinary
+code and linked explanation without hiding the boundaries between them.

@@ -1,0 +1,14 @@
+@title Application Page
+@comment_type none
+
+@s Application root
+
+--- src/main.rs
+@{Shared prelude}
+@{Local variables}
+fn main() { println!("{}", LOCAL); }
+---
+
+--- Local variables
+const LOCAL: &str = "application";
+---

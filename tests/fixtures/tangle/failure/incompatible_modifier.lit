@@ -1,0 +1,7 @@
+@s Incompatible modifier
+--- Block
+first
+---
+--- Block --- += noHeader
+second
+---

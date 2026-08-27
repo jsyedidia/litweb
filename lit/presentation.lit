@@ -1,0 +1,1640 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Presentation
+
+@s From Safe Page Bodies to Complete Offline Output
+
+Weaver produced safe linked page bodies, and Book Weaving decided which pages
+a book needs. Presentation asks what surrounds those bodies so they remain
+readable and useful offline: a complete HTML shell, an embedded color scheme,
+and optional local support for equations and syntax highlighting.
+
+Here is the complete input that will carry the explanation:
+
+````text
+@code_type rust .rs
+@comment_type // %s
+@title Distance
+
+@s Squared Distance
+The formula $d^2 = x^2 + y^2$ gives the squared distance.
+The implementation is in @{distance.rs}.
+
+--- distance.rs
+fn squared_distance(x: f64, y: f64) -> f64 {
+    x * x + y * y
+}
+---
+````
+
+We will weave this example with its identifier index disabled, so the page
+contains only the material needed here. Weaver has already made the body safe:
+the named-block reference is a link to section 1, the TeX source is escaped
+inside a marked math span, and the Rust source is escaped inside a code
+element. The complete `main` element is:
+
+```html
+<main>
+<h1>Distance</h1>
+<section class="section" id="1:1">
+<div class="section-opening">
+<h2 class="section-heading"><span
+ class="section-number">1.</span> <span
+ class="section-title">Squared Distance</span>.</h2>
+<p>The formula <span
+ class="litweb-math litweb-math-inline">d^2 = x^2 + y^2</span> gives the
+squared distance.
+The implementation is in <code
+ class="section-reference">⟨distance.rs <a
+ href="#1:1" aria-label="section 1">1</a>⟩</code>.</p>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span
+ class="section-name">⟨<strong>distance.rs</strong> <a
+ href="#1:1" aria-label="section 1">1</a>⟩</span> <span
+ class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre class="language-rust"><code
+ class="language-rust" data-litweb-highlight="pending"
+ data-litweb-language="rust rs">fn squared_distance(x: f64, y: f64) -&gt; f64 {
+    x * x + y * y
+}
+</code></pre>
+</div>
+</section>
+</main>
+```
+
+Presentation completes `distance.html`, notices the two kinds of marked
+source, and adds the corresponding offline bundles after the page:
+
+```text
+WeavePlan
+|-- distance.html
+|-- litweb-assets/katex-0.18.1/...
+`-- litweb-assets/prism-1.30.0/...
+```
+
+The page is therefore useful in two stages. Its source fallbacks work as soon
+as the HTML opens. When local scripts are available, KaTeX replaces the first
+fallback with a typeset equation and Prism decorates the second with syntax
+colors. We will first complete the page shell, then follow each enhancement
+from fallback marker to planned asset directory.
+
+@s Choosing Optional Features
+
+The opening `Distance` example uses these options to omit its identifier
+index while retaining Litweb's default highlighting scheme. In general,
+identifier indexes and highlighting are enabled by default.
+@code{plan_weave} provides those defaults. @code{plan_weave_with_options}
+lets a command-line or library caller suppress the index or select a color
+scheme for every page in this particular plan.
+
+--- Weave options
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeaveOptions {
+    pub identifier_index: bool,
+    pub color_scheme: Option<PathBuf>,
+}
+
+impl Default for WeaveOptions {
+    fn default() -> Self {
+        Self {
+            identifier_index: true,
+            color_scheme: None,
+        }
+    }
+}
+---
+
+@s Facts Shared While Rendering
+
+The resolved block graph, shared presentation layout, and relationship index
+are three read-only views of the same program. @code{WeaveData} keeps them
+together while HTML pages are rendered. @code{RenderContext} adds the facts
+that can change from one page to another.
+
+For example, a link renderer needs the current page path and chapter to decide
+whether `#1:1` is enough or whether it must first navigate to another file.
+@code{single_page} distinguishes one combined document from a book, and
+@code{highlighting} decides whether target-code elements should request later
+browser work. A book contents page has no current chapter; a one-file page and
+each chapter page do.
+
+--- Page render context
+struct WeaveData<'a> {
+    resolved: &'a ResolvedProgram,
+    layout: &'a WeaveLayout,
+    index: &'a WeaveIndex,
+}
+
+struct RenderContext<'a> {
+    current_chapter: Option<usize>,
+    current_path: &'a Path,
+    single_page: bool,
+    highlighting: bool,
+    book_paths: Option<&'a BookHtmlPaths>,
+}
+---
+
+@s Choosing a Page's Color Scheme
+
+A color scheme supplies the syntax colors for one whole page, even if its
+sections contain several target languages. The `Distance` page has no
+`@colorscheme` command, so it receives Litweb's bundled light scheme.
+@code{PageColorScheme} represents that choice as disabled, built in, or the
+text of a user-selected CSS file.
+
+Four levels determine the result, from strongest to weakest:
+
+1. a command-line selection applies to every page;
+2. a chapter's `@colorscheme` overrides its book manifest;
+3. the manifest supplies the choice for other chapters and the contents page;
+4. with no selection, Litweb uses its default scheme.
+
+An empty `@colorscheme` argument or the name `none` disables highlighting.
+Built-in names are case-insensitive. A relative CSS path written in a `.lit`
+file begins beside that file, while a command-line path begins in the
+process's current directory. Reading a selected custom file is the one
+intentional filesystem read during weaving; a read or UTF-8 failure becomes a
+located error rather than a partly styled page.
+
+--- Choose page color schemes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuiltInColorScheme {
+    Litweb,
+    PrismDefault,
+    Dark,
+    Funky,
+    Okaidia,
+    Twilight,
+    Coy,
+    SolarizedLight,
+    TomorrowNight,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PageColorScheme {
+    Disabled,
+    BuiltIn(BuiltInColorScheme),
+    Custom(String),
+}
+
+impl PageColorScheme {
+    fn css(&self) -> Option<&str> {
+        match self {
+            Self::Disabled => None,
+            Self::BuiltIn(scheme) => Some(scheme.css()),
+            Self::Custom(css) => Some(css),
+        }
+    }
+}
+
+fn last_command(commands: &[Command], kind: CommandKind) -> Option<&Command> {
+    commands.iter().rev().find(|command| command.kind == kind)
+}
+
+fn page_color_scheme(
+    program: &Program,
+    chapter: Option<&Chapter>,
+    command_line: Option<&Path>,
+    errors: &mut Vec<WeaveError>,
+) -> PageColorScheme {
+    let result = if let Some(value) = command_line {
+        resolve_color_scheme(value, None, &program.origin)
+    } else {
+        let command = chapter
+            .and_then(|chapter| last_command(&chapter.commands, CommandKind::ColorScheme))
+            .or_else(|| last_command(&program.commands, CommandKind::ColorScheme));
+        match command {
+            Some(command) if command.arguments.is_empty() => {
+                Ok(PageColorScheme::Disabled)
+            }
+            Some(command) => {
+                let source = Path::new(&command.origin.file);
+                resolve_color_scheme(
+                    Path::new(&command.arguments),
+                    source.parent(),
+                    &command.origin,
+                )
+            }
+            None => Ok(PageColorScheme::BuiltIn(BuiltInColorScheme::Litweb)),
+        }
+    };
+
+    match result {
+        Ok(scheme) => scheme,
+        Err(error) => {
+            errors.push(error);
+            PageColorScheme::Disabled
+        }
+    }
+}
+
+fn resolve_color_scheme(
+    value: &Path,
+    source_directory: Option<&Path>,
+    origin: &SourceOrigin,
+) -> Result<PageColorScheme, WeaveError> {
+    if value
+        .to_str()
+        .is_some_and(|name| name.eq_ignore_ascii_case("none"))
+    {
+        return Ok(PageColorScheme::Disabled);
+    }
+    if value
+        .extension()
+        .is_some_and(|extension| extension == "css")
+    {
+        let path = if value.is_absolute() {
+            value.to_owned()
+        } else {
+            source_directory
+                .unwrap_or_else(|| Path::new(""))
+                .join(value)
+        };
+        let bytes = fs::read(&path).map_err(|error| WeaveError {
+            origin: origin.clone(),
+            kind: WeaveErrorKind::ReadColorScheme {
+                path: path.clone(),
+                kind: error.kind(),
+            },
+        })?;
+        let css = String::from_utf8(bytes).map_err(|error| WeaveError {
+            origin: origin.clone(),
+            kind: WeaveErrorKind::ColorSchemeInvalidUtf8 {
+                path,
+                valid_up_to: error.utf8_error().valid_up_to(),
+            },
+        })?;
+        return Ok(PageColorScheme::Custom(css));
+    }
+
+    let Some(name) = value.to_str() else {
+        return Err(WeaveError {
+            origin: origin.clone(),
+            kind: WeaveErrorKind::UnknownColorScheme {
+                name: value.to_string_lossy().into_owned(),
+            },
+        });
+    };
+    let scheme = match name.to_ascii_lowercase().as_str() {
+        "litweb" => BuiltInColorScheme::Litweb,
+        "prism-default" => BuiltInColorScheme::PrismDefault,
+        "dark" => BuiltInColorScheme::Dark,
+        "funky" => BuiltInColorScheme::Funky,
+        "okaidia" => BuiltInColorScheme::Okaidia,
+        "twilight" => BuiltInColorScheme::Twilight,
+        "coy" => BuiltInColorScheme::Coy,
+        "solarized-light" => BuiltInColorScheme::SolarizedLight,
+        "tomorrow-night" => BuiltInColorScheme::TomorrowNight,
+        _ => {
+            return Err(WeaveError {
+                origin: origin.clone(),
+                kind: WeaveErrorKind::UnknownColorScheme {
+                    name: name.to_owned(),
+                },
+            });
+        }
+    };
+    Ok(PageColorScheme::BuiltIn(scheme))
+}
+---
+
+@s Parts Shared by Every Complete Page
+
+One-file and book pages use the same safe URL and escaping operations. They
+also draw from the same base styles and the same optional equation and
+highlighting support. The generated Rust collects those parts in one group so
+the two page forms cannot quietly choose different helpers.
+
+--- Weaver HTML support and styles
+@{Build a relative page URL}
+@{Percent-encode a URL component}
+@{Escape HTML text and attributes}
+@{Math asset model}
+@{Highlight asset model}
+@{Render math page assets}
+@{Render highlighting page assets}
+@{Highlight theme styles}
+@{Default page style}
+@{Math page style}
+@{Identifier index style}
+@{Book navigation style}
+@{Book identifier-index style}
+---
+
+@s Opening a Book HTML Document
+
+The one-file renderer from Weaver and the book renderer below surround their
+safe bodies with the same essentials: an HTML doctype, language, UTF-8
+metadata, a viewport rule for small screens, an escaped title, embedded
+styles, optional local asset links, and then `body` and `main`.
+
+Book pages append navigation styles to the base stylesheet. Pages that link
+the optional identifier index add its small navigation extension; only the
+identifier page itself needs the identifier-list stylesheet.
+
+@code{BookPageStyle} names those three cases so callers do not have to pass
+an unclear pair of Boolean values.
+
+--- Open a book HTML document
+
+enum BookPageStyle {
+    Ordinary,
+    IdentifierNavigation,
+    IdentifierIndex,
+}
+
+fn render_book_head(
+    output: &mut String,
+    title: &str,
+    page_style: BookPageStyle,
+    current_path: &Path,
+    uses_math: bool,
+    highlight_scheme: Option<&PageColorScheme>,
+) {
+    output.push_str("<!doctype html>\n");
+    render_html_element_open(output, uses_math, highlight_scheme.is_some());
+    output.push_str("<head>\n");
+    output.push_str("<meta charset=\"utf-8\">\n");
+    output.push_str(
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
+    );
+    output.push_str("<title>");
+    push_escaped_text(output, title);
+    output.push_str("</title>\n");
+    if uses_math {
+        render_math_stylesheet_link(output, current_path);
+    }
+    output.push_str("<style>\n");
+    output.push_str(DEFAULT_STYLE);
+    output.push_str(BOOK_STYLE);
+    if uses_math {
+        output.push_str(MATH_STYLE);
+    }
+    if matches!(
+        page_style,
+        BookPageStyle::IdentifierNavigation | BookPageStyle::IdentifierIndex
+    ) {
+        output.push_str(BOOK_IDENTIFIER_STYLE);
+    }
+    if matches!(page_style, BookPageStyle::IdentifierIndex) {
+        output.push_str(IDENTIFIER_STYLE);
+    }
+    if let Some(scheme) = highlight_scheme {
+        render_highlight_theme_css(output, scheme);
+    }
+    output.push_str("</style>\n");
+    if uses_math {
+        render_math_scripts(output, current_path);
+    }
+    if highlight_scheme.is_some() {
+        render_highlight_scripts(output, current_path);
+    }
+    output.push_str("</head>\n<body>\n<main>\n");
+}
+---
+
+@s Styling the Readable Page
+
+The embedded base stylesheet makes the unenhanced page comfortable to read
+with fonts already available in the browser. Its groups control five visible
+ideas: page width and typography, continuous section openings, bordered code
+and quiet relationship notes, visible keyboard focus and hidden accessible
+labels, and scroll containers for material that is wider than the page.
+
+The CSS below is production source, but its individual property values are
+less important than those purposes. Semantic headings remain headings,
+number-only headings retain wording for screen readers, and keyboard users
+can see which link has focus. Wide code and tables scroll within their own
+panels rather than widening the whole document. Inline code preserves authored
+spaces while still wrapping when necessary; code blocks retain the whitespace
+behavior of their surrounding `pre` element.
+
+--- Default page style
+const DEFAULT_STYLE: &str = r#"body {
+    color: #222;
+    background: #fff;
+    font-family: Georgia, serif;
+    line-height: 1.5;
+    margin: 0;
+}
+main {
+    max-width: 56rem;
+    margin: 0 auto;
+    padding: clamp(0.75rem, 4vw, 2rem);
+}
+.section {
+    margin: 2.5rem 0;
+}
+.section-heading {
+    font-size: 1rem;
+    margin: 0 0 1rem;
+}
+.section-opening > .section-heading,
+.section-opening > p,
+.section-opening > .codeblock_name {
+    display: inline;
+    margin: 0;
+}
+.section-number,
+.chapter-number,
+.definition-operator {
+    white-space: nowrap;
+}
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.codeblock {
+    margin: 1.25rem 0;
+}
+.codeblock-first {
+    margin-top: 0;
+}
+.codeblock_name {
+    margin-left: min(1rem, 3vw);
+    font-family: monospace;
+    overflow-wrap: anywhere;
+}
+.section-opening > .codeblock_name {
+    margin-left: 0;
+}
+.definition-operator {
+    font-family: Georgia, serif;
+}
+code {
+    white-space: pre-wrap;
+}
+pre code {
+    white-space: inherit;
+}
+pre {
+    overflow-x: auto;
+    border: 1px solid #d8d8d8;
+    background: #f7f7f7;
+    padding: 0.8rem 1rem;
+    line-height: 1.35;
+}
+.table-scroll {
+    overflow-x: auto;
+    margin: 1.25rem 0;
+}
+.table-scroll table {
+    border-collapse: collapse;
+    width: max-content;
+    min-width: 100%;
+}
+.table-scroll th,
+.table-scroll td {
+    border: 1px solid #d8d8d8;
+    padding: 0.45rem 0.7rem;
+    vertical-align: top;
+}
+.table-scroll th {
+    background: #f7f7f7;
+}
+.table-align-left {
+    text-align: left;
+}
+.table-align-center {
+    text-align: center;
+}
+.table-align-right {
+    text-align: right;
+}
+.nocode {
+    color: #555;
+    font-style: italic;
+}
+.seealso {
+    margin: 0.2rem 0 0 min(1rem, 3vw);
+    font-size: 0.9rem;
+    color: #555;
+}
+.section-name a,
+.section-reference a,
+.nocode a,
+.seealso a {
+    text-decoration: none;
+}
+.section-name a:focus-visible,
+.section-reference a:focus-visible,
+.nocode a:focus-visible,
+.seealso a:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+a {
+    color: #245b8a;
+}
+"#;
+---
+
+@s The Versioned Math Asset Bundle
+
+KaTeX is stored as reviewed public assets rather than pasted into this
+chapter. @code{include_bytes!} places those files in the compiled @code{lw}
+binary, so an installed program can emit an offline document without finding
+the repository at runtime. The array below is the complete public bundle:
+KaTeX's JavaScript, stylesheet, compact web-font files, Litweb's small
+renderer, and the license and provenance files. The long font list belongs in
+the authoritative manifest rather than in a prose inventory.
+
+The output directory includes the KaTeX version. A later upgrade can therefore
+change the bundle deliberately without making an existing page silently load
+different rendering code.
+
+--- Math asset model
+const MATH_ASSET_DIRECTORY: &str = "litweb-assets/katex-0.18.1";
+const INLINE_MATH_MARKER: &[u8] = b"<span class=\"litweb-math litweb-math-inline\">";
+const DISPLAY_MATH_MARKER: &[u8] = b"<div class=\"litweb-math litweb-math-display\">";
+
+struct MathAsset {
+    path: &'static str,
+    bytes: &'static [u8],
+}
+
+const MATH_ASSETS: &[MathAsset] = &[
+    MathAsset {
+        path: "katex.min.js",
+        bytes: include_bytes!("../assets/katex/0.18.1/katex.min.js"),
+    },
+    MathAsset {
+        path: "katex.min.css",
+        bytes: include_bytes!("../assets/katex/0.18.1/katex.min.css"),
+    },
+    MathAsset {
+        path: "litweb-math.js",
+        bytes: include_bytes!("../assets/katex/0.18.1/litweb-math.js"),
+    },
+    MathAsset {
+        path: "LICENSE",
+        bytes: include_bytes!("../assets/katex/0.18.1/LICENSE"),
+    },
+    MathAsset {
+        path: "README.md",
+        bytes: include_bytes!("../assets/katex/0.18.1/README.md"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_AMS-Regular.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_AMS-Regular.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Caligraphic-Bold.woff2",
+        bytes: include_bytes!(
+            "../assets/katex/0.18.1/fonts/KaTeX_Caligraphic-Bold.woff2"
+        ),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Caligraphic-Regular.woff2",
+        bytes: include_bytes!(
+            "../assets/katex/0.18.1/fonts/KaTeX_Caligraphic-Regular.woff2"
+        ),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Fraktur-Bold.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Fraktur-Bold.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Fraktur-Regular.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Fraktur-Regular.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Main-Bold.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Main-Bold.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Main-BoldItalic.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Main-BoldItalic.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Main-Italic.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Main-Italic.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Main-Regular.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Main-Regular.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Math-BoldItalic.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Math-BoldItalic.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Math-Italic.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Math-Italic.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_SansSerif-Bold.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_SansSerif-Bold.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_SansSerif-Italic.woff2",
+        bytes: include_bytes!(
+            "../assets/katex/0.18.1/fonts/KaTeX_SansSerif-Italic.woff2"
+        ),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_SansSerif-Regular.woff2",
+        bytes: include_bytes!(
+            "../assets/katex/0.18.1/fonts/KaTeX_SansSerif-Regular.woff2"
+        ),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Script-Regular.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Script-Regular.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Size1-Regular.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Size1-Regular.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Size2-Regular.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Size2-Regular.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Size3-Regular.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Size3-Regular.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Size4-Regular.woff2",
+        bytes: include_bytes!("../assets/katex/0.18.1/fonts/KaTeX_Size4-Regular.woff2"),
+    },
+    MathAsset {
+        path: "fonts/KaTeX_Typewriter-Regular.woff2",
+        bytes: include_bytes!(
+            "../assets/katex/0.18.1/fonts/KaTeX_Typewriter-Regular.woff2"
+        ),
+    },
+];
+
+fn math_asset_path(path: &str) -> PathBuf {
+    Path::new(MATH_ASSET_DIRECTORY).join(path)
+}
+---
+
+@s Linking a Page to Its Math Support
+
+Pages without equations keep their old head exactly. A page containing a math
+placeholder adds a pending readiness attribute, the local KaTeX stylesheet,
+and two deferred scripts in execution order. The `Distance` page is at the
+output root, so its stylesheet URL is
+`litweb-assets/katex-0.18.1/katex.min.css`. A nested book chapter uses the
+relative-URL operation from Book Weaving to reach that same shared directory.
+
+The Litweb script processes only marked placeholders. After every formula has
+either succeeded or retained its source with an error message, it waits for
+fonts and changes `data-litweb-math-ready` to `true`. The page-wide
+`data-litweb-ready` state becomes true only after math and highlighting, when
+requested, have both finished. A later print or PDF tool therefore needs to
+wait for only one state.
+
+--- Render math page assets
+fn page_contains_math(body: &str) -> bool {
+    body.contains("<span class=\"litweb-math litweb-math-inline\">")
+        || body.contains("<div class=\"litweb-math litweb-math-display\">")
+}
+
+fn render_html_element_open(
+    output: &mut String,
+    uses_math: bool,
+    uses_highlighting: bool,
+) {
+    output.push_str("<html lang=\"en\"");
+    if uses_math || uses_highlighting {
+        output.push_str(" data-litweb-ready=\"pending\"");
+    }
+    if uses_math {
+        output.push_str(" data-litweb-math-ready=\"pending\"");
+    }
+    if uses_highlighting {
+        output.push_str(" data-litweb-highlight-ready=\"pending\"");
+    }
+    output.push_str(">\n");
+}
+
+fn render_math_stylesheet_link(output: &mut String, current_path: &Path) {
+    output.push_str("<link rel=\"stylesheet\" href=\"");
+    push_escaped_attribute(
+        output,
+        &relative_url(current_path, &math_asset_path("katex.min.css")),
+    );
+    output.push_str("\">\n");
+}
+
+fn render_math_scripts(output: &mut String, current_path: &Path) {
+    for script in ["katex.min.js", "litweb-math.js"] {
+        output.push_str("<script defer src=\"");
+        push_escaped_attribute(
+            output,
+            &relative_url(current_path, &math_asset_path(script)),
+        );
+        output.push_str("\"></script>\n");
+    }
+}
+---
+
+@s Keeping Equation Fallbacks Readable
+
+Before JavaScript runs, a placeholder uses a monospace face and preserves the
+TeX source's whitespace. A display equation gets a centered row with its own
+horizontal overflow instead of widening the page. Successful KaTeX rendering
+adds a class that removes the fallback styling. Litweb sets the finished math
+slightly closer to the surrounding prose size than KaTeX's default.
+
+If a formula is malformed, the source remains visible and an adjacent message
+explains the error; color is not the only signal. Print rules keep one display
+together and reveal unusually wide contents rather than printing a clipped
+scroll area.
+
+--- Math page style
+const MATH_STYLE: &str = r#".litweb-math:not(.litweb-math-rendered) {
+    font-family: monospace;
+    white-space: pre-wrap;
+}
+.litweb-math-display {
+    margin: 1rem 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    text-align: center;
+}
+.litweb-math-display .katex-display {
+    margin: 0;
+}
+.litweb-math .katex {
+    font-size: 1.1em;
+}
+.litweb-math-error {
+    color: #9b1c1c;
+}
+.litweb-math-error-message {
+    font-family: system-ui, sans-serif;
+    font-size: 0.85em;
+    font-style: normal;
+}
+.litweb-math-display .litweb-math-error-message {
+    display: block;
+    margin-top: 0.35rem;
+}
+@media print {
+    .litweb-math-display {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        overflow-x: visible;
+        overflow-y: visible;
+    }
+}
+"#;
+---
+
+@s Choosing a Code Language Class
+
+Prism calls the rules for one programming language a **grammar**. Litweb does
+not guess a grammar by examining the code. It starts with the language and
+extension from `@code_type rust .rs`, so the opening block records `rust rs`
+as explicit candidates and uses `rust` as its HTML class.
+
+Some familiar language names contain punctuation or differ from Prism's
+names: `C++` becomes `cpp`, for example. The normalizer handles those cases.
+Every other candidate must contain only ASCII letters, digits, hyphens, or
+underscores, which keeps it safe to place in the page's metadata.
+
+--- Choose a code language class
+
+struct CodeLanguage {
+    primary: String,
+    candidates: String,
+}
+
+fn code_language(code_type: &str) -> Option<CodeLanguage> {
+    let mut parts = code_type.split_whitespace();
+    let name = parts.next()?;
+    let extension = parts.next().and_then(|value| value.strip_prefix('.'));
+    let primary = normalize_code_language(name)
+        .or_else(|| extension.and_then(normalize_code_language))?;
+    let mut candidates = primary.clone();
+    if let Some(extension) = extension.and_then(normalize_code_language)
+        && extension != primary
+    {
+        candidates.push(' ');
+        candidates.push_str(&extension);
+    }
+    Some(CodeLanguage {
+        primary,
+        candidates,
+    })
+}
+
+fn normalize_code_language(value: &str) -> Option<String> {
+    let lowercase = value.to_ascii_lowercase();
+    let normalized = match lowercase.as_str() {
+        "c++" | "objective-c++" => "cpp",
+        "c#" => "csharp",
+        "f#" => "fsharp",
+        "objective-c" => "objectivec",
+        "shell" => "bash",
+        "html" | "xml" => "markup",
+        "tex" => "latex",
+        value => value,
+    };
+    (!normalized.is_empty()
+        && normalized.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+        }))
+    .then(|| normalized.to_owned())
+}
+---
+
+@s The Versioned Prism Asset Bundle
+
+Prism's core and every official language grammar are assembled in dependency
+order into one reviewed browser file. Litweb's much smaller adapter selects
+one of the explicit candidates stored on each code element. The theme sources
+travel with the bundle for inspection and attribution even though the
+selected theme is embedded directly in each affected page.
+
+As with KaTeX, the array is the authoritative inventory. It keeps the Prism
+license, the theme license, and provenance beside the scripts and reviewed
+theme sources without making the prose enumerate every file.
+
+--- Highlight asset model
+const HIGHLIGHT_ASSET_DIRECTORY: &str = "litweb-assets/prism-1.30.0";
+const HIGHLIGHT_PAGE_MARKER: &[u8] = b"data-litweb-highlight-ready=\"pending\"";
+
+struct HighlightAsset {
+    path: &'static str,
+    bytes: &'static [u8],
+}
+
+const HIGHLIGHT_ASSETS: &[HighlightAsset] = &[
+    HighlightAsset {
+        path: "prism-all.min.js",
+        bytes: include_bytes!("../assets/prism/1.30.0/prism-all.min.js"),
+    },
+    HighlightAsset {
+        path: "litweb-highlight.js",
+        bytes: include_bytes!("../assets/prism/1.30.0/litweb-highlight.js"),
+    },
+    HighlightAsset {
+        path: "LICENSE-Prism",
+        bytes: include_bytes!("../assets/prism/1.30.0/LICENSE-Prism"),
+    },
+    HighlightAsset {
+        path: "LICENSE-Primer",
+        bytes: include_bytes!("../assets/prism/1.30.0/LICENSE-Primer"),
+    },
+    HighlightAsset {
+        path: "README.md",
+        bytes: include_bytes!("../assets/prism/1.30.0/README.md"),
+    },
+    HighlightAsset {
+        path: "themes/litweb.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/litweb.css"),
+    },
+    HighlightAsset {
+        path: "themes/default.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/default.css"),
+    },
+    HighlightAsset {
+        path: "themes/dark.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/dark.css"),
+    },
+    HighlightAsset {
+        path: "themes/funky.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/funky.css"),
+    },
+    HighlightAsset {
+        path: "themes/okaidia.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/okaidia.css"),
+    },
+    HighlightAsset {
+        path: "themes/twilight.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/twilight.css"),
+    },
+    HighlightAsset {
+        path: "themes/coy.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/coy.css"),
+    },
+    HighlightAsset {
+        path: "themes/solarized-light.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/solarized-light.css"),
+    },
+    HighlightAsset {
+        path: "themes/tomorrow-night.css",
+        bytes: include_bytes!("../assets/prism/1.30.0/themes/tomorrow-night.css"),
+    },
+];
+
+fn highlight_asset_path(path: &str) -> PathBuf {
+    Path::new(HIGHLIGHT_ASSET_DIRECTORY).join(path)
+}
+---
+
+@s Linking a Page to Its Highlighting Support
+
+The `Distance` code element keeps its escaped Rust source and adds
+`data-litweb-highlight="pending"` plus the candidates `rust rs`. That marker
+requests Prism. The page embeds its selected theme and loads the all-language
+bundle before Litweb's deferred adapter. A nested page reaches the shared
+directory through the same relative-URL operation used for math.
+
+The adapter tries the explicit grammar candidates in order. If none is
+available, or highlighting fails, the original source stays readable. It
+touches only direct text children, so a named-block link already protected in
+a `nocode` element never enters Prism. Once an element is complete, another
+adapter run skips it instead of nesting a second layer of colored spans.
+After all elements and fonts are ready, the adapter updates the highlighting
+and page-wide readiness states.
+
+--- Render highlighting page assets
+fn page_contains_highlighting(body: &str) -> bool {
+    body.contains("data-litweb-highlight=\"pending\"")
+}
+
+fn render_highlight_scripts(output: &mut String, current_path: &Path) {
+    for script in ["prism-all.min.js", "litweb-highlight.js"] {
+        output.push_str("<script defer src=\"");
+        push_escaped_attribute(
+            output,
+            &relative_url(current_path, &highlight_asset_path(script)),
+        );
+        output.push_str("\"></script>\n");
+    }
+}
+---
+
+@s Selecting and Safely Embedding Theme CSS
+
+For `Distance`, the selected Litweb theme is compiled into `lw` and copied
+into the page's `style` element. Custom CSS follows the same embedding path,
+except that the user supplied its bytes. Raw text such as `</style` would
+otherwise end the HTML element even when it occurred inside a CSS string.
+Inserting a CSS escape before the slash keeps the HTML parser inside the style
+element while preserving the slash that CSS intended.
+
+Official Prism themes contain typography and box-layout rules as well as
+colors. Those rules made the same Litweb code block change size when a reader
+changed schemes. After a bundled theme, Litweb therefore restores its own
+monospace face, inherited size, line height, margin, and padding. Theme colors,
+backgrounds, shadows, and decorations remain. A custom `.css` file is included
+exactly as the author supplied it and receives no such normalization.
+
+--- Highlight theme styles
+impl BuiltInColorScheme {
+    fn css(self) -> &'static str {
+        match self {
+            Self::Litweb => include_str!("../assets/prism/1.30.0/themes/litweb.css"),
+            Self::PrismDefault => {
+                include_str!("../assets/prism/1.30.0/themes/default.css")
+            }
+            Self::Dark => include_str!("../assets/prism/1.30.0/themes/dark.css"),
+            Self::Funky => include_str!("../assets/prism/1.30.0/themes/funky.css"),
+            Self::Okaidia => include_str!("../assets/prism/1.30.0/themes/okaidia.css"),
+            Self::Twilight => include_str!("../assets/prism/1.30.0/themes/twilight.css"),
+            Self::Coy => include_str!("../assets/prism/1.30.0/themes/coy.css"),
+            Self::SolarizedLight => {
+                include_str!("../assets/prism/1.30.0/themes/solarized-light.css")
+            }
+            Self::TomorrowNight => {
+                include_str!("../assets/prism/1.30.0/themes/tomorrow-night.css")
+            }
+        }
+    }
+}
+
+fn render_highlight_theme_css(output: &mut String, scheme: &PageColorScheme) {
+    if let Some(css) = scheme.css() {
+        push_style_text(output, css);
+        output.push('\n');
+    }
+    if matches!(scheme, PageColorScheme::BuiltIn(_)) {
+        output.push_str(BUILT_IN_HIGHLIGHT_LAYOUT_STYLE);
+    }
+}
+
+const BUILT_IN_HIGHLIGHT_LAYOUT_STYLE: &str = concat!(
+    "/* Litweb owns code typography and panel geometry. */\n",
+    r#"code[class*="language-"],
+pre[class*="language-"] {
+    font-family: monospace;
+    font-size: inherit;
+}
+code[class*="language-"] {
+    line-height: inherit;
+}
+pre[class*="language-"] {
+    margin: 1em 0;
+    padding: 0.8rem 1rem;
+    line-height: 1.35;
+}
+"#,
+);
+
+fn push_style_text(output: &mut String, css: &str) {
+    let mut position = 0;
+    while position < css.len() {
+        let rest = &css[position..];
+        if rest
+            .as_bytes()
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"</style"))
+        {
+            output.push_str("<\\/style");
+            position += 7;
+        } else {
+            let character = rest
+                .chars()
+                .next()
+                .expect("position is on a character boundary");
+            output.push(character);
+            position += character.len_utf8();
+        }
+    }
+}
+---
+
+@s Identifier Index Style
+
+Identifier CSS is embedded only when a page actually displays an index.
+Documents without supported identifiers and runs using @code{--no-index}
+therefore do not carry unused index styling.
+
+Index terms and their locations need to remain readable when names are long or
+the screen is narrow. A wide page uses one column for identifiers and one for
+locations; below the narrow-screen breakpoint, the media rule stacks them.
+The locations use equal-width numerals so lists of chapter and section numbers
+align. Ordinary links remain recognizable by color and keyboard focus, while
+the continuous underline marks definition locations.
+
+--- Identifier index style
+const IDENTIFIER_STYLE: &str = r#".identifier-index {
+    margin: 3rem 0 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid #d8d8d8;
+    font-family: Arial, Helvetica, sans-serif;
+    font-variant-numeric: lining-nums tabular-nums;
+}
+.identifier-index dl {
+    display: grid;
+    grid-template-columns: minmax(8rem, 14rem) 1fr;
+    gap: 0.25rem 1rem;
+}
+.identifier-index dt,
+.identifier-index dd {
+    margin: 0;
+}
+.identifier-index dt {
+    overflow-wrap: anywhere;
+}
+.identifier-index dd {
+    font-size: 0.875em;
+}
+.identifier-index a {
+    text-decoration: none;
+}
+.identifier-index a.identifier-definition {
+    text-decoration: underline;
+    text-decoration-thickness: 0.12em;
+    text-underline-offset: 0.12em;
+    text-decoration-skip-ink: none;
+}
+.identifier-index a:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+@media (max-width: 36rem) {
+    .identifier-index dl {
+        grid-template-columns: 1fr;
+    }
+    .identifier-index dd {
+        margin-bottom: 0.5rem;
+    }
+}
+"#;
+---
+
+@s Book Navigation Style
+
+Books add a navigation row that can wrap on a narrow screen instead of
+forcing a horizontal scroll bar. Their contents lists preserve the manifest's
+nested chapter structure. Keeping this extension separate means an ordinary
+one-page document does not carry book-only rules.
+
+--- Book navigation style
+
+const BOOK_STYLE: &str = r#".book-navigation {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+.book-navigation .contents {
+    margin-inline: auto;
+}
+.book-contents ol {
+    list-style: none;
+    margin-top: 0.35rem;
+    padding-left: 1.5rem;
+}
+.book-contents > ol {
+    padding-left: 0;
+}
+"#;
+---
+
+@s Book Identifier-Index Style
+
+Only a book with identifier entries needs the centered Contents/Index pair.
+That pair can also wrap on a narrow screen. On the index page, a small gap
+separates repeated chapter groups and italics distinguish the book title from
+the identifier entries.
+
+--- Book identifier-index style
+const BOOK_IDENTIFIER_STYLE: &str = r#".book-navigation-indexes {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.25rem 1rem;
+    margin-inline: auto;
+}
+.book-navigation-indexes .contents {
+    margin-inline: 0;
+}
+.book-index-navigation {
+    margin: 1.5rem 0;
+}
+.identifier-index-book-title {
+    font-style: italic;
+}
+.identifier-chapter-group + .identifier-chapter-group {
+    margin-top: 0.25rem;
+}
+"#;
+---
+
+@s Planning the Math Bundle from Completed Pages
+
+The completed HTML pages themselves decide which shared files belong in the
+plan. A math placeholder requests the KaTeX directory; the highlighting
+readiness marker requests the Prism directory. Looking at finished pages keeps
+this decision consistent with what a reader will actually see. It also means
+that several enhanced chapters still share one copy of each bundle.
+
+Before adding either directory, Weaver compares every page path with every
+fixed asset path. A page cannot replace an asset, nor can one be the directory
+needed to reach the other. This is the last presentation-specific collision
+check. Output will later compare the combined Tangler and Weaver plans with
+each other and with the filesystem.
+
+--- Plan math assets
+fn planned_pages_contain_math(outputs: &[PlannedOutput]) -> bool {
+    outputs.iter().any(|output| {
+        output
+            .bytes
+            .windows(INLINE_MATH_MARKER.len())
+            .any(|window| window == INLINE_MATH_MARKER)
+            || output
+                .bytes
+                .windows(DISPLAY_MATH_MARKER.len())
+                .any(|window| window == DISPLAY_MATH_MARKER)
+    })
+}
+
+fn plan_math_assets(
+    program: &Program,
+    pages: &[PlannedOutput],
+    errors: &mut Vec<WeaveError>,
+) -> Vec<PlannedOutput> {
+    for page in pages {
+        for asset in MATH_ASSETS {
+            let asset_path = math_asset_path(asset.path);
+            if paths_conflict_as_files(&page.relative_path, &asset_path) {
+                errors.push(WeaveError {
+                    origin: page.origin.clone(),
+                    kind: WeaveErrorKind::MathAssetPathCollision {
+                        page: page.relative_path.clone(),
+                        asset: asset_path,
+                    },
+                });
+                return Vec::new();
+            }
+        }
+    }
+
+    MATH_ASSETS
+        .iter()
+        .map(|asset| PlannedOutput {
+            relative_path: math_asset_path(asset.path),
+            bytes: asset.bytes.to_vec(),
+            origin: program.origin.clone(),
+        })
+        .collect()
+}
+
+fn paths_conflict_as_files(left: &Path, right: &Path) -> bool {
+    left == right || left.starts_with(right) || right.starts_with(left)
+}
+---
+
+@s Planning the Highlighting Bundle from Completed Pages
+
+The highlighting check follows the same rule. It looks for the page-wide
+marker rather than searching again for individual code elements.
+
+--- Plan highlighting assets
+fn planned_pages_contain_highlighting(outputs: &[PlannedOutput]) -> bool {
+    outputs.iter().any(|output| {
+        output
+            .bytes
+            .windows(HIGHLIGHT_PAGE_MARKER.len())
+            .any(|window| window == HIGHLIGHT_PAGE_MARKER)
+    })
+}
+
+fn plan_highlight_assets(
+    program: &Program,
+    pages: &[PlannedOutput],
+    errors: &mut Vec<WeaveError>,
+) -> Vec<PlannedOutput> {
+    for page in pages {
+        for asset in HIGHLIGHT_ASSETS {
+            let asset_path = highlight_asset_path(asset.path);
+            if paths_conflict_as_files(&page.relative_path, &asset_path) {
+                errors.push(WeaveError {
+                    origin: page.origin.clone(),
+                    kind: WeaveErrorKind::HighlightAssetPathCollision {
+                        page: page.relative_path.clone(),
+                        asset: asset_path,
+                    },
+                });
+                return Vec::new();
+            }
+        }
+    }
+
+    HIGHLIGHT_ASSETS
+        .iter()
+        .map(|asset| PlannedOutput {
+            relative_path: highlight_asset_path(asset.path),
+            bytes: asset.bytes.to_vec(),
+            origin: program.origin.clone(),
+        })
+        .collect()
+}
+---
+
+@s Keeping Resolution and Presentation Failures Distinct
+
+Some failures occur before page work begins: Resolver may find an invalid
+definition graph or root. Others belong to weaving: a page name may be
+unusable, a visible reference unresolved, a selected stylesheet unreadable,
+or a page path in conflict with a fixed asset path.
+
+@code{WeavePlanError} preserves that boundary. A caller can distinguish a
+Resolver failure from a group of presentation failures without examining
+displayed text. @code{WeaveErrors} retains the latter in their discovery
+order, including the source origins and definition candidates that make them
+actionable.
+
+--- Weave plan failures
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WeavePlanError {
+    Resolution(ResolveErrors),
+    Weave(WeaveErrors),
+}
+
+impl fmt::Display for WeavePlanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resolution(errors) => write!(f, "{errors}"),
+            Self::Weave(errors) => write!(f, "{errors}"),
+        }
+    }
+}
+
+impl std::error::Error for WeavePlanError {}
+---
+
+@s Recording Presentation Failures
+
+Each @code{WeaveErrorKind} names the fact that failed: output naming,
+identifier-page or asset-path selection, theme selection or reading, or a
+visible named-block reference. @code{WeaveError} pairs that fact with its
+source origin. The aggregate exposes the full list to library callers while
+its display form reports the first error and the number that remain.
+
+--- Weave errors
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeaveError {
+    pub origin: SourceOrigin,
+    pub kind: WeaveErrorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WeaveErrorKind {
+    InvalidOutputName,
+    ContentsPathCollision {
+        path: PathBuf,
+    },
+    IdentifierIndexPathCollision {
+        path: PathBuf,
+    },
+    MathAssetPathCollision {
+        page: PathBuf,
+        asset: PathBuf,
+    },
+    HighlightAssetPathCollision {
+        page: PathBuf,
+        asset: PathBuf,
+    },
+    UnknownColorScheme {
+        name: String,
+    },
+    ReadColorScheme {
+        path: PathBuf,
+        kind: io::ErrorKind,
+    },
+    ColorSchemeInvalidUtf8 {
+        path: PathBuf,
+        valid_up_to: usize,
+    },
+    UndefinedBlock {
+        name: String,
+    },
+    AmbiguousBlock {
+        name: String,
+        candidates: Vec<SourceOrigin>,
+    },
+}
+
+impl fmt::Display for WeaveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: error: ", self.origin)?;
+        match &self.kind {
+            WeaveErrorKind::InvalidOutputName => {
+                f.write_str("the input path has no usable HTML output name")
+            }
+            WeaveErrorKind::ContentsPathCollision { path } => write!(
+                f,
+                "chapter output collides with the contents page: {}",
+                path.display()
+            ),
+            WeaveErrorKind::IdentifierIndexPathCollision { path } => write!(
+                f,
+                "the identifier index output {} conflicts with another book page",
+                path.display()
+            ),
+            WeaveErrorKind::MathAssetPathCollision { page, asset } => write!(
+                f,
+                "the book page {} conflicts with the math asset path {}",
+                page.display(),
+                asset.display()
+            ),
+            WeaveErrorKind::HighlightAssetPathCollision { page, asset } => write!(
+                f,
+                "the book page {} conflicts with the syntax-highlighting asset path {}",
+                page.display(),
+                asset.display()
+            ),
+            WeaveErrorKind::UnknownColorScheme { name } => write!(
+                f,
+                concat!(
+                    "unknown color scheme {}; expected litweb, prism-default, dark, ",
+                    "funky, okaidia, twilight, coy, solarized-light, tomorrow-night, ",
+                    "none, or a .css file",
+                ),
+                name
+            ),
+            WeaveErrorKind::ReadColorScheme { path, kind } => {
+                write!(f, "cannot read color scheme {}: {kind}", path.display())
+            }
+            WeaveErrorKind::ColorSchemeInvalidUtf8 { path, valid_up_to } => write!(
+                f,
+                "color scheme {} is not UTF-8 at byte {valid_up_to}",
+                path.display()
+            ),
+            WeaveErrorKind::UndefinedBlock { name } => {
+                write!(f, "code block {{{name}}} is not defined")
+            }
+            WeaveErrorKind::AmbiguousBlock { name, candidates } => write!(
+                f,
+                "code block {{{name}}} is ambiguous; definitions are at {}",
+                candidates
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WeaveError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeaveErrors {
+    errors: Vec<WeaveError>,
+}
+
+impl WeaveErrors {
+    pub fn as_slice(&self) -> &[WeaveError] {
+        &self.errors
+    }
+
+    pub fn into_vec(self) -> Vec<WeaveError> {
+        self.errors
+    }
+}
+
+impl fmt::Display for WeaveErrors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(first) = self.errors.first() {
+            write!(f, "{first}")?;
+            if self.errors.len() > 1 {
+                write!(f, " (and {} more weave errors)", self.errors.len() - 1)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for WeaveErrors {}
+---
+
+@s Weaver Module Dependencies
+
+Maps and sets hold relationship indexes, formatting appends HTML to strings,
+and path types keep filesystem paths separate from URLs. The filesystem import
+is used only to read an explicitly selected custom stylesheet.
+
+The Litweb imports summarize the inputs to all three Weaver chapters. Parser
+supplies authored occurrences, Resolver supplies definition identities,
+Identifier supplies target-language names, and Prose plus the inline helpers
+supply recognized readable content. The result is stored in Output's neutral
+@code{PlannedOutput} type. The small utility module recognizes named-block
+references shared with Tangler.
+
+--- Weaver imports
+use std::fmt;
+use std::fmt::Write as _;
+use std::fs;
+use std::io;
+use std::path::{Component, Path, PathBuf};
+
+use crate::identifier::{
+    IdentifierRole, analyze_resolved as analyze_resolved_identifiers,
+};
+use crate::inline::TableAlignment;
+use crate::output::PlannedOutput;
+use crate::parser::{
+    Block, BlockKind, BookMetadata, Chapter, Command, CommandKind, Modifier, Program,
+    Section, SourceOrigin,
+};
+use crate::prose::{
+    FencedProse, InlineElement, InlineSource, ProseBlock, ProseList, ProseTable,
+    TableCell, inline_elements, prose_block,
+};
+use crate::resolver::{BlockLookup, ResolveErrors, ResolvedProgram, resolve};
+use crate::util::{block_reference, leading_whitespace};
+use crate::woven::{
+    LocatedIdentifierIndex, LocatedIdentifierLocation, SectionLocation, WeaveIndex,
+    WeaveLayout, WeaveSection, collect_locations, locate_identifiers,
+};
+---
+
+@s Joining the Planning Operations
+
+The three chapters still generate one Rust module. This final planning group
+puts the HTML operations in compiler order: page context and themes, complete
+page rendering, optional asset planning, and output-name choices. The shared
+woven-document module now owns location collection.
+
+--- Weaver planning
+@{Page render context}
+@{Choose page color schemes}
+@{Plan woven output}
+@{Plan book pages}
+@{Plan math assets}
+@{Plan highlighting assets}
+@{Choose the book identifier-index path}
+@{Choose a single-page output name}
+---
+
+@s Planning the Complete Set of Output Files
+
+All the pieces of the opening example now have names. `plan_weave_with_options`
+first resolves the program and derives the layout and indexes explained in
+Weaver. It then renders either one page or the group of pages explained in
+Book Weaving. Only after those HTML strings are complete does it inspect their
+markers and append the required asset bundles.
+
+The order is observable and deliberate:
+
+```text
+WeavePlan
+|-- all complete HTML page outputs, in book order
+|-- the KaTeX bundle, if any page contains a math placeholder
+`-- the Prism bundle, if any page requests highlighting
+```
+
+Planning may read a custom CSS file explicitly selected by the user, but it
+does not create or replace an output file. If resolution fails, or if any page
+or asset reports a fatal weave error, the function returns an error instead
+of the partly assembled vector.
+
+--- Plan woven output
+pub fn plan_weave(program: &Program) -> Result<WeavePlan, WeavePlanError> {
+    plan_weave_with_options(program, WeaveOptions::default())
+}
+
+pub fn plan_weave_with_options(
+    program: &Program,
+    options: WeaveOptions,
+) -> Result<WeavePlan, WeavePlanError> {
+    let resolved = resolve(program).map_err(WeavePlanError::Resolution)?;
+    let layout = WeaveLayout::new(program);
+    let index = collect_locations(program, &resolved, &layout);
+    let data = WeaveData {
+        resolved: &resolved,
+        layout: &layout,
+        index: &index,
+    };
+    let mut errors = Vec::new();
+    let identifiers = if options.identifier_index {
+        locate_identifiers(&analyze_resolved_identifiers(program, &resolved), &layout)
+    } else {
+        LocatedIdentifierIndex::default()
+    };
+    let mut outputs = if let Some(book) = program.book() {
+        plan_book_weave(
+            program,
+            book,
+            &data,
+            &identifiers,
+            options.color_scheme.as_deref(),
+            &mut errors,
+        )
+    } else {
+        let output_name = html_output_name(program).map_err(|error| {
+            WeavePlanError::Weave(WeaveErrors {
+                errors: vec![error],
+            })
+        })?;
+        let color_scheme = page_color_scheme(
+            program,
+            None,
+            options.color_scheme.as_deref(),
+            &mut errors,
+        );
+        let html = render_document(
+            program,
+            &data,
+            &identifiers,
+            &output_name,
+            &color_scheme,
+            &mut errors,
+        );
+        vec![PlannedOutput {
+            relative_path: output_name,
+            bytes: html.into_bytes(),
+            origin: program.origin.clone(),
+        }]
+    };
+    let uses_math = planned_pages_contain_math(&outputs);
+    let uses_highlighting = planned_pages_contain_highlighting(&outputs);
+    if uses_math {
+        outputs.extend(plan_math_assets(program, &outputs, &mut errors));
+    }
+    if uses_highlighting {
+        outputs.extend(plan_highlight_assets(program, &outputs, &mut errors));
+    }
+
+    if !errors.is_empty() {
+        return Err(WeavePlanError::Weave(WeaveErrors { errors }));
+    }
+
+    Ok(WeavePlan { outputs })
+}
+---
+
+@s Ready for Output
+
+The result handed to Output is now complete. Every source-derived string has
+been escaped or otherwise placed safely, every section and identifier link
+has a fixed destination, every page has the styles and relative asset links
+it needs, and every requested versioned asset is already present as bytes.
+Nothing has yet been written.
+
+Output can therefore examine the combined Tangle and Weave plans as one
+filesystem proposal. The next chapter explains how it rejects unsafe
+destinations before making any change, then replaces the approved files.

@@ -1,0 +1,1236 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Prose
+
+@s One Prose Occurrence, Three Readers
+
+Parser preserves the ordinary lines between code blocks as a
+**parsed prose occurrence**. That occurrence is still source text: it has not
+yet become an
+HTML paragraph, list, example, or table. Consider this complete section:
+
+````text
+@code_type rust .rs
+@s Notes
+Call @code{parse_str()} before continuing.
+
+```text
+@s Not a section
+--- Not a block
+@code{not_rust()}
+```
+
+Name | Example
+--- | ---
+type | @code{Graph}
+````
+
+Parser retains everything after `@s Notes` as one prose occurrence. The
+complete fence protects its apparent `@s` and `--- Not a block`; the table
+protects its `--- | ---` delimiter row. None of those lines changes Parser's
+section or code-block state.
+
+Within the retained occurrence, the block-level recognizer finds three
+**prose elements**:
+
+```text
+Parsed prose occurrence
+|-- Paragraph
+|   `-- "Call @code{parse_str()} before continuing."
+|-- Fence
+|   |-- information string "text"
+|   `-- literal lines from "@s Not a section" through "@code{not_rust()}"
+`-- Table
+    |-- header cells "Name", "Example"
+    `-- body cells "type", "@code{Graph}"
+```
+
+An element is one paragraph, list, fence, table, or display equation inside a
+larger parsed occurrence. This is the level later output code will render.
+
+Identifier asks a different question of the same text. Its active
+target-language spans are `parse_str()` in the paragraph and `Graph` in the
+table. The apparent `not_rust()` span is inside a literal fence, so it is
+opaque and does not enter the Rust identifier index.
+
+@s Shared Recognition, Not Another Pipeline Stage
+
+Prose recognition is a shared service rather than a public stage that runs
+once between Tangler and Identifier:
+
+```text
+                         +-> Parser shields literal ranges
+raw prose -> inline.rs --+-> Identifier finds active target code
+                         +-> output writers share inline forms
+                         `-> prose.rs groups Parser Lines -> output writers
+```
+
+An **inline form** is notation recognized within a paragraph, one list item,
+or one table cell. Most forms stay on one physical source line. Emphasis and
+strong text may cross a soft line break inside the same paragraph or list
+item, but never a blank line or another block boundary. An **opaque region**
+keeps its contents from being interpreted as other prose notation. An
+**active region** may still contain supported nested forms. Complete fences,
+backtick code, inline equations, escapes, and link targets create important
+opaque boundaries. Emphasis and link labels remain active, so a
+target-language span may appear inside them.
+
+Two private Rust modules keep the dependency direction clear.
+@code{inline.rs} recognizes meaningful spans using only text, which permits
+Parser to call it. @code{prose.rs} builds larger elements from Parser's
+located @code{Line} values. Identifier and the later HTML and LaTeX writers
+use the parts appropriate to their own work.
+
+@s The Text-Level Module
+
+The independent module combines complete-fence recognition, target-code and
+math spans, protected table rows, and the walk that collects active
+target-code spans.
+
+--- src/inline.rs
+//! Shared recognition of prose delimiters and target-language spans.
+
+@{Fenced prose delimiter recognizer}
+@{Inline code-span recognizer}
+@{Inline math-span recognizer}
+@{Pipe-table row recognizer}
+@{Collect inline source-code spans}
+---
+
+@s Complete Fences
+
+Three or more backticks or tildes can open a fence. The opening records its
+delimiter character and length, up to three leading spaces, and an optional
+information string such as `text` or `rust`. A close uses the same character
+at least as many times and has no trailing text.
+
+Recognition is deliberately based on a complete pair. If no close exists,
+the apparent opener remains ordinary active prose rather than hiding the rest
+of the document. @code{fenced_line_mask} marks the opener, contents, and close
+only after finding the complete range. In the running example this makes
+`@code{not_rust()}` opaque to Identifier.
+
+--- Fenced prose delimiter recognizer
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FenceOpening {
+    pub character: u8,
+    pub length: usize,
+    pub indentation: usize,
+    pub info: String,
+}
+
+pub(crate) fn fence_opening(text: &str) -> Option<FenceOpening> {
+    let indentation = text.bytes().take_while(|byte| *byte == b' ').count();
+    if indentation > 3 {
+        return None;
+    }
+    let rest = &text[indentation..];
+    let character = *rest.as_bytes().first()?;
+    if !matches!(character, b'`' | b'~') {
+        return None;
+    }
+    let length = rest.bytes().take_while(|byte| *byte == character).count();
+    if length < 3 {
+        return None;
+    }
+    let info = rest[length..].trim();
+    if character == b'`' && info.contains('`') {
+        return None;
+    }
+    Some(FenceOpening {
+        character,
+        length,
+        indentation,
+        info: info.to_owned(),
+    })
+}
+
+pub(crate) fn fence_closes(text: &str, opening: &FenceOpening) -> bool {
+    let indentation = text.bytes().take_while(|byte| *byte == b' ').count();
+    if indentation > 3 {
+        return false;
+    }
+    let rest = &text[indentation..];
+    let length = rest
+        .bytes()
+        .take_while(|byte| *byte == opening.character)
+        .count();
+    length >= opening.length && rest[length..].trim().is_empty()
+}
+
+pub(crate) fn fenced_line_mask(lines: &[&str]) -> Vec<bool> {
+    let mut mask = vec![false; lines.len()];
+    let mut line = 0;
+    while line < lines.len() {
+        let Some(opening) = fence_opening(lines[line]) else {
+            line += 1;
+            continue;
+        };
+        let Some(close) = (line + 1..lines.len())
+            .find(|candidate| fence_closes(lines[*candidate], &opening))
+        else {
+            line += 1;
+            continue;
+        };
+        mask[line..=close].fill(true);
+        line = close + 1;
+    }
+    mask
+}
+---
+
+@s Target-Language Code in Prose
+
+The `@code{...}` form exposes target-language text without making it a
+tangled code block. @code{CodeInProse::Closed} returns the decoded text and
+the number of source bytes consumed. Braces may nest, and backslash can quote
+a brace or another backslash. An opening with no matching close returns
+@code{Unclosed}, telling a consumer to leave the remainder literal.
+
+In the running paragraph, the result is the span `parse_str()`. The table cell
+similarly yields `Graph`.
+
+--- Inline code-span recognizer
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CodeInProse {
+    Closed { text: String, consumed: usize },
+    Unclosed,
+}
+
+pub(crate) fn code_in_prose(text: &str) -> Option<CodeInProse> {
+    const OPEN: &str = "@code{";
+
+    let contents = text.strip_prefix(OPEN)?;
+    let mut code = String::new();
+    let mut depth = 1;
+    let mut characters = contents.char_indices().peekable();
+
+    while let Some((offset, character)) = characters.next() {
+        if character == '\\' {
+            if let Some((_, escaped)) = characters.peek().copied()
+                && matches!(escaped, '{' | '}' | '\\')
+            {
+                characters.next();
+                code.push(escaped);
+                continue;
+            }
+            code.push(character);
+            continue;
+        }
+
+        match character {
+            '{' => {
+                depth += 1;
+                code.push(character);
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(CodeInProse::Closed {
+                        text: code,
+                        consumed: OPEN.len() + offset + character.len_utf8(),
+                    });
+                }
+                code.push(character);
+            }
+            _ => code.push(character),
+        }
+    }
+
+    Some(CodeInProse::Unclosed)
+}
+---
+
+@s Inline Equations
+
+An inline equation begins and ends with one unescaped dollar sign. A double
+dollar belongs to the display-equation form described later, and an unmatched
+single dollar remains ordinary text.
+
+The recognizer returns only the length of the complete span. That is enough
+for table splitting and Identifier to keep the equation opaque; Weaver later
+interprets the preserved TeX source.
+
+--- Inline math-span recognizer
+pub(crate) fn inline_math_span(text: &str) -> Option<usize> {
+    let contents = text.strip_prefix('$')?;
+    if contents.starts_with('$') {
+        return None;
+    }
+
+    let mut backslashes = 0;
+    for (offset, character) in contents.char_indices() {
+        if character == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        if character == '$'
+            && backslashes % 2 == 0
+            && !contents[..offset].ends_with('$')
+            && !contents[offset + 1..].starts_with('$')
+        {
+            return Some(1 + offset + 1);
+        }
+        backslashes = 0;
+    }
+    None
+}
+---
+
+@s Finding Cells in a Table Row
+
+A table begins only when a heading row is immediately followed by a row of
+hyphen delimiters. The delimiter cells also choose alignment:
+
+| Delimiter | Alignment |
+| :--- | :--- |
+| `---` or `:---` | left |
+| `:---:` | center |
+| `---:` | right |
+
+Splitting a row treats an ordinary pipe as a cell boundary. A pipe protected
+by an escape, backtick code, target-language code, a named-block reference,
+an inline equation, or a complete link stays inside its current cell. Optional
+outside pipes do not create empty edge cells.
+
+Parser needs the broader header-plus-delimiter shape even when the two rows
+have different widths: it must protect a table-shaped `--- | ---` line from
+becoming a code opening. @code{table_start} requires matching nonzero widths
+before `prose.rs` recognizes a table element.
+
+--- Pipe-table row recognizer
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TableAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TableStart {
+    pub header: Vec<String>,
+    pub alignments: Vec<TableAlignment>,
+}
+
+pub(crate) fn table_start(header: &str, delimiter: &str) -> Option<TableStart> {
+    let header = table_row(header)?;
+    let alignments = table_delimiter(delimiter)?;
+    if header.is_empty() || header.len() != alignments.len() {
+        return None;
+    }
+
+    Some(TableStart { header, alignments })
+}
+
+pub(crate) fn table_candidate(header: &str, delimiter: &str) -> bool {
+    table_row(header).is_some() && table_delimiter(delimiter).is_some()
+}
+
+pub(crate) fn table_row(text: &str) -> Option<Vec<String>> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let leading_separator = trimmed.starts_with('|');
+    let mut trailing_separator = false;
+    let mut cells = vec![String::new()];
+    let mut separators = 0;
+    let mut position = 0;
+
+    while position < text.len() {
+        let rest = &text[position..];
+        if let Some(consumed) = protected_table_span(rest) {
+            cells
+                .last_mut()
+                .expect("a table row always has a current cell")
+                .push_str(&rest[..consumed]);
+            if rest[..consumed]
+                .chars()
+                .any(|character| !character.is_whitespace())
+            {
+                trailing_separator = false;
+            }
+            position += consumed;
+            continue;
+        }
+
+        let character = rest
+            .chars()
+            .next()
+            .expect("position remains on a character boundary");
+        position += character.len_utf8();
+        if character == '|' {
+            separators += 1;
+            cells.push(String::new());
+            trailing_separator = true;
+        } else {
+            cells
+                .last_mut()
+                .expect("a table row always has a current cell")
+                .push(character);
+            if !character.is_whitespace() {
+                trailing_separator = false;
+            }
+        }
+    }
+
+    if separators == 0 {
+        return None;
+    }
+    if leading_separator {
+        cells.remove(0);
+    }
+    if trailing_separator {
+        cells.pop();
+    }
+    for cell in &mut cells {
+        *cell = cell.trim().to_owned();
+    }
+    (!cells.is_empty()).then_some(cells)
+}
+
+pub(crate) fn table_line_mask(lines: &[&str]) -> Vec<bool> {
+    let fenced = fenced_line_mask(lines);
+    let mut mask = vec![false; lines.len()];
+    let mut line = 0;
+
+    while line + 1 < lines.len() {
+        if fenced[line]
+            || fenced[line + 1]
+            || !table_candidate(lines[line], lines[line + 1])
+        {
+            line += 1;
+            continue;
+        }
+
+        let start = line;
+        line += 2;
+        while line < lines.len()
+            && !fenced[line]
+            && !lines[line].trim().is_empty()
+            && table_row(lines[line]).is_some()
+        {
+            line += 1;
+        }
+        mask[start..line].fill(true);
+    }
+    mask
+}
+
+fn table_alignment(text: &str) -> Option<TableAlignment> {
+    let mut delimiter = text.trim();
+    let leading = delimiter.starts_with(':');
+    if leading {
+        delimiter = &delimiter[1..];
+    }
+    let trailing = delimiter.ends_with(':');
+    if trailing {
+        delimiter = &delimiter[..delimiter.len() - 1];
+    }
+    if delimiter.len() < 3 || !delimiter.bytes().all(|byte| byte == b'-') {
+        return None;
+    }
+    Some(match (leading, trailing) {
+        (true, true) => TableAlignment::Center,
+        (false, true) => TableAlignment::Right,
+        _ => TableAlignment::Left,
+    })
+}
+
+fn table_delimiter(text: &str) -> Option<Vec<TableAlignment>> {
+    table_row(text)?
+        .iter()
+        .map(|cell| table_alignment(cell))
+        .collect()
+}
+
+fn protected_table_span(text: &str) -> Option<usize> {
+    if let Some(after_escape) = text.strip_prefix('\\') {
+        return Some(1 + after_escape.chars().next().map_or(0, char::len_utf8));
+    }
+
+    if let Some(after_open) = text.strip_prefix('`')
+        && let Some(end) = after_open.find('`')
+    {
+        return Some(1 + end + 1);
+    }
+
+    if let Some(CodeInProse::Closed { consumed, .. }) = code_in_prose(text) {
+        return Some(consumed);
+    }
+
+    if let Some(after_open) = text.strip_prefix("@{")
+        && let Some(end) = after_open.find('}')
+    {
+        return Some(2 + end + 1);
+    }
+
+    if let Some(consumed) = inline_math_span(text) {
+        return Some(consumed);
+    }
+
+    if let Some(after_open) = text.strip_prefix('[')
+        && let Some(label_end) = after_open.find("](")
+    {
+        let after_target_open = &after_open[label_end + 2..];
+        if let Some(target_end) = after_target_open.find(')') {
+            return Some(1 + label_end + 2 + target_end + 1);
+        }
+    }
+
+    None
+}
+---
+
+@s Collecting Active Target-Code Spans
+
+Identifier needs each target-code span on an active prose line. The walk skips
+opaque block references, backtick code, equations, and escapes. It descends
+into supported emphasis and link labels because those visible regions remain
+active.
+
+The result for the running example is `["parse_str()"]` on the paragraph,
+none on any fenced line, and `["Graph"]` on the last table row. Identifier
+will decide how the words inside those strings belong in its index.
+
+--- Collect inline source-code spans
+pub(crate) fn source_code_spans(text: &str) -> Vec<String> {
+    let mut spans = Vec::new();
+    collect_source_code_spans(text, &mut spans);
+    spans
+}
+
+fn collect_source_code_spans(text: &str, spans: &mut Vec<String>) {
+    let mut position = 0;
+    while position < text.len() {
+        let rest = &text[position..];
+
+        if let Some(after_open) = rest.strip_prefix("@{")
+            && let Some(end) = after_open.find('}')
+        {
+            position += 2 + end + 1;
+            continue;
+        }
+
+        if let Some(after_open) = rest.strip_prefix('`')
+            && let Some(end) = after_open.find('`')
+        {
+            position += 1 + end + 1;
+            continue;
+        }
+
+        if let Some(consumed) = inline_math_span(rest) {
+            position += consumed;
+            continue;
+        }
+
+        if let Some(code) = code_in_prose(rest) {
+            match code {
+                CodeInProse::Closed { text, consumed } => {
+                    spans.push(text);
+                    position += consumed;
+                    continue;
+                }
+                CodeInProse::Unclosed => break,
+            }
+        }
+
+        if let Some(after_open) = rest.strip_prefix("**")
+            && let Some(end) = after_open.find("**")
+        {
+            collect_source_code_spans(&after_open[..end], spans);
+            position += 2 + end + 2;
+            continue;
+        }
+
+        if let Some(after_open) = rest.strip_prefix('*')
+            && let Some(end) = after_open.find('*')
+        {
+            collect_source_code_spans(&after_open[..end], spans);
+            position += 1 + end + 1;
+            continue;
+        }
+
+        if let Some(after_open) = rest.strip_prefix('[')
+            && let Some(label_end) = after_open.find("](")
+        {
+            let after_target_open = &after_open[label_end + 2..];
+            if let Some(target_end) = after_target_open.find(')') {
+                collect_source_code_spans(&after_open[..label_end], spans);
+                position += 1 + label_end + 2 + target_end + 1;
+                continue;
+            }
+        }
+
+        if let Some(after_escape) = rest.strip_prefix('\\')
+            && let Some(character) = after_escape.chars().next()
+        {
+            position += 1 + character.len_utf8();
+            continue;
+        }
+
+        let character = rest
+            .chars()
+            .next()
+            .expect("position is on a character boundary");
+        position += character.len_utf8();
+    }
+}
+---
+
+@s The Block-Level Module
+
+The second module receives Parser's located lines and recognizes the next
+larger prose element. It depends on `inline.rs` for fence and table
+boundaries, but it produces no HTML.
+
+--- src/prose.rs
+//! Recognition of block-level forms in prose.
+
+use crate::inline::{
+    CodeInProse, TableAlignment, code_in_prose, fence_closes, fence_opening,
+    inline_math_span, table_row, table_start,
+};
+use crate::parser::{Line, SourceOrigin};
+
+@{Prose block model}
+@{Inline prose model}
+@{Classify one prose block}
+@{Recognize prose lists}
+@{Recognize fenced prose}
+@{Recognize prose tables}
+@{Recognize display equations}
+@{Parse inline prose}
+---
+
+@s Located Prose Elements
+
+@code{ProseBlock} records one element within a parsed prose occurrence.
+Paragraphs need only a half-open range of line indexes. A list keeps the
+content-bearing part of each physical line. A fence records its delimiter and
+content ranges, removable indentation, and information string. A table keeps
+each cell's text and physical row. A display equation keeps its range and
+exact TeX source.
+
+Those locations matter after recognition. A block reference on a wrapped list
+line or in a table cell must still report the physical line where it was
+written.
+
+--- Prose block model
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProseBlock {
+    Paragraph { start: usize, end: usize },
+    List { end: usize, list: ProseList },
+    Fence(FencedProse),
+    Table(ProseTable),
+    DisplayMath { end: usize, source: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProseList {
+    pub ordered_start: Option<usize>,
+    pub items: Vec<ListItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListItem {
+    pub parts: Vec<ProseLinePart>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProseLinePart {
+    pub line: usize,
+    pub content_start: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FencedProse {
+    pub start: usize,
+    pub end: usize,
+    pub content_start: usize,
+    pub content_end: usize,
+    pub indentation: usize,
+    pub info: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProseTable {
+    pub end: usize,
+    pub alignments: Vec<TableAlignment>,
+    pub header: Vec<TableCell>,
+    pub body: Vec<Vec<TableCell>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TableCell {
+    pub line: usize,
+    pub text: String,
+}
+
+impl ProseBlock {
+    pub fn end(&self) -> usize {
+        match self {
+            Self::Paragraph { end, .. }
+            | Self::List { end, .. }
+            | Self::DisplayMath { end, .. } => *end,
+            Self::Fence(fence) => fence.end,
+            Self::Table(table) => table.end,
+        }
+    }
+}
+---
+
+@s Inline Meaning Before Output Syntax
+
+Block recognition tells later output code where paragraphs, lists, examples,
+tables, and displayed equations begin and end. The contents of a paragraph or
+list item need a similar description. @code{InlineElement} records that
+description without choosing HTML or LaTeX notation. The Woven Document
+chapter will name the larger output boundary; here the important point is that
+both formats receive the same recognized meaning.
+
+Most variants own their visible contents. Emphasis, strong text, and link
+labels contain another list of elements because the supported inline forms may
+appear inside them. A named-block reference also retains the physical source
+line on which it was written, so a later renderer can report a missing or
+ambiguous name accurately.
+
+--- Inline prose model
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InlineElement {
+    Text(String),
+    Code(String),
+    SourceCode {
+        text: String,
+        origin: SourceOrigin,
+    },
+    Math(String),
+    Strong(Vec<InlineElement>),
+    Emphasis(Vec<InlineElement>),
+    Link {
+        label: Vec<InlineElement>,
+        target: String,
+        active: bool,
+    },
+    BlockReference {
+        name: String,
+        origin: SourceOrigin,
+    },
+}
+
+pub(crate) struct InlineSource {
+    text: String,
+    line_origins: Vec<(usize, SourceOrigin)>,
+}
+
+impl InlineSource {
+    pub fn new() -> Self {
+        Self {
+            text: String::new(),
+            line_origins: Vec::new(),
+        }
+    }
+
+    pub fn push_line(&mut self, text: &str, origin: &SourceOrigin) {
+        if !self.line_origins.is_empty() {
+            self.text.push('\n');
+        }
+        self.line_origins.push((self.text.len(), origin.clone()));
+        self.text.push_str(text);
+    }
+
+    fn origin_at(&self, position: usize) -> &SourceOrigin {
+        let line = self
+            .line_origins
+            .partition_point(|(start, _)| *start <= position)
+            .saturating_sub(1);
+        &self.line_origins[line].1
+    }
+
+    fn current_line(&self, position: usize, end: usize) -> &str {
+        let rest = &self.text[position..end];
+        rest.find('\n').map_or(rest, |newline| &rest[..newline])
+    }
+}
+---
+
+@s Recognizing Inline Meaning Once
+
+@code{inline_elements} performs the same ordered scan previously embedded in
+the HTML writer. It recognizes a form, records its meaning, and leaves all
+escaping to whichever output writer is selected. Strong text, emphasis, and
+link labels are parsed recursively. Backtick and target-language code remain
+opaque, and only emphasis may cross the soft newlines collected in one inline
+source.
+
+An unsafe link target is not discarded. Its element has @code{active} set to
+false, so either output writer can show the authored bracket-and-parenthesis
+form without activating it.
+
+--- Parse inline prose
+pub(crate) fn inline_elements(source: &InlineSource) -> Vec<InlineElement> {
+    inline_elements_in(source, 0..source.text.len())
+}
+
+fn inline_elements_in(
+    source: &InlineSource,
+    range: std::ops::Range<usize>,
+) -> Vec<InlineElement> {
+    let mut elements = Vec::new();
+    let mut text = String::new();
+    let mut position = range.start;
+
+    while position < range.end {
+        let rest = &source.text[position..range.end];
+        let line_rest = source.current_line(position, range.end);
+        let origin = source.origin_at(position);
+
+        if let Some(after_open) = line_rest.strip_prefix("@{")
+            && let Some(end) = after_open.find('}')
+        {
+            push_inline_text(&mut elements, &mut text);
+            elements.push(InlineElement::BlockReference {
+                name: after_open[..end].to_owned(),
+                origin: origin.clone(),
+            });
+            position += 2 + end + 1;
+            continue;
+        }
+
+        if let Some(after_open) = line_rest.strip_prefix('`')
+            && let Some(end) = after_open.find('`')
+        {
+            push_inline_text(&mut elements, &mut text);
+            elements.push(InlineElement::Code(after_open[..end].to_owned()));
+            position += 1 + end + 1;
+            continue;
+        }
+
+        if let Some(code) = code_in_prose(line_rest) {
+            match code {
+                CodeInProse::Closed {
+                    text: code,
+                    consumed,
+                } => {
+                    push_inline_text(&mut elements, &mut text);
+                    elements.push(InlineElement::SourceCode {
+                        text: code,
+                        origin: origin.clone(),
+                    });
+                    position += consumed;
+                    continue;
+                }
+                CodeInProse::Unclosed => {
+                    text.push_str(line_rest);
+                    position += line_rest.len();
+                    continue;
+                }
+            }
+        }
+
+        if let Some(consumed) = inline_math_span(line_rest) {
+            push_inline_text(&mut elements, &mut text);
+            elements.push(InlineElement::Math(line_rest[1..consumed - 1].to_owned()));
+            position += consumed;
+            continue;
+        }
+
+        if let Some(after_open) = rest.strip_prefix("**") {
+            if let Some(end) = after_open.find("**") {
+                push_inline_text(&mut elements, &mut text);
+                elements.push(InlineElement::Strong(inline_elements_in(
+                    source,
+                    position + 2..position + 2 + end,
+                )));
+                position += 2 + end + 2;
+            } else {
+                text.push_str("**");
+                position += 2;
+            }
+            continue;
+        }
+
+        if let Some(after_open) = rest.strip_prefix('*')
+            && let Some(end) = after_open.find('*')
+        {
+            push_inline_text(&mut elements, &mut text);
+            elements.push(InlineElement::Emphasis(inline_elements_in(
+                source,
+                position + 1..position + 1 + end,
+            )));
+            position += 1 + end + 1;
+            continue;
+        }
+
+        if let Some(after_open) = line_rest.strip_prefix('[')
+            && let Some(label_end) = after_open.find("](")
+        {
+            let after_target_open = &after_open[label_end + 2..];
+            if let Some(target_end) = after_target_open.find(')') {
+                push_inline_text(&mut elements, &mut text);
+                let target = after_target_open[..target_end].to_owned();
+                elements.push(InlineElement::Link {
+                    label: inline_elements_in(
+                        source,
+                        position + 1..position + 1 + label_end,
+                    ),
+                    active: safe_link_target(&target),
+                    target,
+                });
+                position += 1 + label_end + 2 + target_end + 1;
+                continue;
+            }
+        }
+
+        if let Some(after_escape) = line_rest.strip_prefix('\\')
+            && let Some(character) = after_escape.chars().next()
+        {
+            text.push(character);
+            position += 1 + character.len_utf8();
+            continue;
+        }
+
+        let character = rest
+            .chars()
+            .next()
+            .expect("position is on a character boundary");
+        text.push(character);
+        position += character.len_utf8();
+    }
+
+    push_inline_text(&mut elements, &mut text);
+    elements
+}
+
+fn push_inline_text(elements: &mut Vec<InlineElement>, text: &mut String) {
+    if !text.is_empty() {
+        elements.push(InlineElement::Text(std::mem::take(text)));
+    }
+}
+
+fn safe_link_target(target: &str) -> bool {
+    if target.chars().any(char::is_control) {
+        return false;
+    }
+    let target = target.trim_start().to_ascii_lowercase();
+    !target.starts_with("javascript:")
+        && !target.starts_with("data:")
+        && !target.starts_with("vbscript:")
+}
+---
+
+@s Finding the Next Element
+
+Starting from the next nonblank line, the classifier tries a display equation,
+complete fence, table, and list in that order. If none begins there, it
+collects an ordinary paragraph until a blank or a recognized structured form.
+
+An incomplete fence or display equation is not a structured element. Its
+visible delimiter remains in an ordinary paragraph, where later inline
+recognition can still find active forms after it.
+
+--- Classify one prose block
+pub(crate) fn prose_block(lines: &[Line], from: usize) -> Option<ProseBlock> {
+    let start = (from..lines.len()).find(|line| !lines[*line].text.trim().is_empty())?;
+
+    if let Some(block) = display_math(lines, start) {
+        return Some(block);
+    }
+    if let Some(fence) = fenced_prose(lines, start) {
+        return Some(ProseBlock::Fence(fence));
+    }
+    if let Some(table) = prose_table(lines, start) {
+        return Some(ProseBlock::Table(table));
+    }
+    if let Some(marker) = list_marker(&lines[start].text) {
+        return Some(prose_list(lines, start, marker));
+    }
+
+    let mut end = start + 1;
+    while end < lines.len()
+        && !lines[end].text.trim().is_empty()
+        && display_math(lines, end).is_none()
+        && fenced_prose(lines, end).is_none()
+        && prose_table(lines, end).is_none()
+        && list_marker(&lines[end].text).is_none()
+    {
+        end += 1;
+    }
+    Some(ProseBlock::Paragraph { start, end })
+}
+---
+
+@s Lists and Continuation Lines
+
+A line beginning with `- ` starts an unordered item. Digits followed by
+`. ` start an ordered item. A continuation belongs to that item only when
+spaces indent it at least to the column where the first line's content began.
+An unindented sentence therefore starts a new paragraph.
+
+Only adjacent markers of the same kind join one list. The first ordered marker
+chooses the displayed starting number; later source numbers do not renumber
+individual items.
+
+--- Recognize prose lists
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListMarker {
+    Unordered { content_start: usize },
+    Ordered { number: usize, content_start: usize },
+}
+
+impl ListMarker {
+    fn content_start(self) -> usize {
+        match self {
+            Self::Unordered { content_start } | Self::Ordered { content_start, .. } => {
+                content_start
+            }
+        }
+    }
+
+    fn same_kind(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Unordered { .. }, Self::Unordered { .. })
+                | (Self::Ordered { .. }, Self::Ordered { .. })
+        )
+    }
+}
+
+fn list_marker(text: &str) -> Option<ListMarker> {
+    if text.starts_with("- ") {
+        return Some(ListMarker::Unordered { content_start: 2 });
+    }
+
+    let digits = text
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digits == 0 || !text[digits..].starts_with(". ") {
+        return None;
+    }
+    Some(ListMarker::Ordered {
+        number: text[..digits].parse().ok()?,
+        content_start: digits + 2,
+    })
+}
+
+fn prose_list(lines: &[Line], start: usize, first_marker: ListMarker) -> ProseBlock {
+    let ordered_start = match first_marker {
+        ListMarker::Unordered { .. } => None,
+        ListMarker::Ordered { number, .. } => Some(number),
+    };
+    let mut items = Vec::new();
+    let mut line = start;
+
+    loop {
+        let marker = list_marker(&lines[line].text)
+            .expect("the list loop begins at a recognized marker");
+        if !first_marker.same_kind(marker) {
+            break;
+        }
+
+        let content_start = marker.content_start();
+        let mut parts = vec![ProseLinePart {
+            line,
+            content_start,
+        }];
+        line += 1;
+        while line < lines.len() && !lines[line].text.trim().is_empty() {
+            if list_marker(&lines[line].text).is_some() {
+                break;
+            }
+            let indentation = lines[line]
+                .text
+                .bytes()
+                .take_while(|byte| *byte == b' ')
+                .count();
+            if indentation < content_start {
+                break;
+            }
+            parts.push(ProseLinePart {
+                line,
+                content_start,
+            });
+            line += 1;
+        }
+        items.push(ListItem { parts });
+
+        let Some(next_marker) = lines.get(line).and_then(|line| list_marker(&line.text))
+        else {
+            break;
+        };
+        if !first_marker.same_kind(next_marker) {
+            break;
+        }
+    }
+
+    ProseBlock::List {
+        end: line,
+        list: ProseList {
+            ordered_start,
+            items,
+        },
+    }
+}
+---
+
+@s Fences as Prose Elements
+
+The text-level helper recognizes delimiter lines. The block-level operation
+finds the matching close and records the complete element. The content range
+excludes the two delimiters, and @code{indentation} records the spaces an
+output writer will remove from each literal content line.
+
+This is the second view of the running fence: Parser first protected the
+complete range, Identifier used its opaque mask, and the element recognizer
+now supplies output code with its `text` information string and literal
+contents.
+
+--- Recognize fenced prose
+fn fenced_prose(lines: &[Line], start: usize) -> Option<FencedProse> {
+    let opening = fence_opening(&lines[start].text)?;
+    let close = (start + 1..lines.len())
+        .find(|line| fence_closes(&lines[*line].text, &opening))?;
+    Some(FencedProse {
+        start,
+        end: close + 1,
+        content_start: start + 1,
+        content_end: close,
+        indentation: opening.indentation,
+        info: opening.info,
+    })
+}
+
+---
+
+@s Tables with Located Cells
+
+The text-level recognizer has already split the heading, alignment, and body
+rows. The element recognizer establishes the heading width and attaches every
+cell to its physical row. A short row is padded with empty cells; a long row
+is clipped to the established width.
+
+In the running table, the two header cells and two body cells keep their
+source lines. HTML and LaTeX can later render each cell using the same inline
+rules as a paragraph, and an error inside a cell can still name the correct
+line.
+
+--- Recognize prose tables
+fn prose_table(lines: &[Line], start: usize) -> Option<ProseTable> {
+    let syntax = table_start(&lines.get(start)?.text, &lines.get(start + 1)?.text)?;
+    let width = syntax.header.len();
+    let header = syntax
+        .header
+        .into_iter()
+        .map(|text| TableCell { line: start, text })
+        .collect();
+
+    let mut body = Vec::new();
+    let mut line = start + 2;
+    while line < lines.len()
+        && !lines[line].text.trim().is_empty()
+        && display_math(lines, line).is_none()
+        && fenced_prose(lines, line).is_none()
+        && list_marker(&lines[line].text).is_none()
+    {
+        let Some(cells) = table_row(&lines[line].text) else {
+            break;
+        };
+        let mut row = cells
+            .into_iter()
+            .take(width)
+            .map(|text| TableCell { line, text })
+            .collect::<Vec<_>>();
+        row.resize_with(width, || TableCell {
+            line,
+            text: String::new(),
+        });
+        body.push(row);
+        line += 1;
+    }
+
+    Some(ProseTable {
+        end: line,
+        alignments: syntax.alignments,
+        header,
+        body,
+    })
+}
+---
+
+@s Display Equations
+
+A display equation begins with `$$` after optional indentation. It may close
+on the same line or on a later line whose closing pair is unescaped and
+followed only by whitespace. Recognition preserves the exact interior lines
+joined by LF.
+
+As with an incomplete fence, a display opener with no valid close remains
+ordinary paragraph text. Turning preserved math into HTML or LaTeX belongs to
+the selected output writer rather than this recognizer.
+
+--- Recognize display equations
+fn display_math(lines: &[Line], start: usize) -> Option<ProseBlock> {
+    let opening = lines[start].text.trim_start().strip_prefix("$$")?;
+    if let Some(closing) = display_math_closing(opening) {
+        return Some(ProseBlock::DisplayMath {
+            end: start + 1,
+            source: opening[..closing].to_owned(),
+        });
+    }
+
+    let mut source_lines = Vec::new();
+    if !opening.trim().is_empty() {
+        source_lines.push(opening);
+    }
+    for (line, located) in lines.iter().enumerate().skip(start + 1) {
+        let text = &located.text;
+        if let Some(closing) = display_math_closing(text) {
+            let final_line = &text[..closing];
+            if !final_line.trim().is_empty() {
+                source_lines.push(final_line);
+            }
+            return Some(ProseBlock::DisplayMath {
+                end: line + 1,
+                source: source_lines.join("\n"),
+            });
+        }
+        source_lines.push(text);
+    }
+    None
+}
+
+fn display_math_closing(text: &str) -> Option<usize> {
+    text.match_indices("$$").find_map(|(offset, _)| {
+        (!delimiter_is_escaped(text, offset) && text[offset + 2..].trim().is_empty())
+            .then_some(offset)
+    })
+}
+
+fn delimiter_is_escaped(text: &str, offset: usize) -> bool {
+    text[..offset]
+        .chars()
+        .rev()
+        .take_while(|character| *character == '\\')
+        .count()
+        % 2
+        == 1
+}
+---
+
+@s What the Consumers Receive
+
+For the running source, Parser retains one occurrence and never mistakes the
+literal `@s`, the literal `--- Not a block`, or the table delimiter for its
+own syntax. Identifier receives two active Rust spans, `parse_str()` and
+`Graph`, with the source lines that supplied them. The output writers receive
+a paragraph range, a complete literal fence, and a two-column table whose
+cells retain their rows.
+
+The shared recognizers stop there. Identifier will lex and classify names in
+the active Rust spans. HTML and LaTeX will turn the same elements and inline
+forms into their own safe notation. Because all consumers start from the same
+boundaries, an example cannot be literal to one of them while active to
+another.

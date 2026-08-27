@@ -1,0 +1,32 @@
+@title Markdown Weave
+
+@s Markdown
+
+This paragraph has **bold text**, *emphasis*, `inline code`, and a link to
+the @{Snippet} code block. It also has [a safe link](https://example.com).
+
+- alpha wraps with *emphasis*
+  on the next source line.
+- beta
+
+3. third
+   continues with `code`.
+9. fourth
+
+```text
+<fixed & literal>
+@{not a reference}
+```
+
+| Form | Meaning | Count |
+| :--- | :---: | ---: |
+| `-` | *unordered* | 2 |
+| `N.` | [ordered](guide.html) | 3 |
+
+--- markdown.txt
+@{Snippet}
+---
+
+--- Snippet
+rendered <once>
+---

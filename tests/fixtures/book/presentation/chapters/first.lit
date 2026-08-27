@@ -1,0 +1,13 @@
+@title First Page
+
+@s First titled section
+The first page defines a local repeated name and one unique name.
+--- Shared
+first_shared();
+---
+--- Shared +=
+continued_first_shared();
+---
+--- First only
+first_only();
+---

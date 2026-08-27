@@ -1,0 +1,101 @@
+@book
+@title Litweb
+
+Litweb keeps a program and the explanation of that program in one readable
+source. Here is a complete small example:
+
+````text
+@code_type rust .rs
+@title Distance
+
+@s Squared Distance
+The formula $d^2 = x^2 + y^2$ gives the squared distance.
+The implementation is in @{distance.rs}.
+
+--- distance.rs
+fn squared_distance(x: f64, y: f64) -> f64 {
+    x * x + y * y
+}
+---
+````
+
+Tangling follows the root named `distance.rs` and writes the ordinary Rust
+file:
+
+```rust
+fn squared_distance(x: f64, y: f64) -> f64 {
+    x * x + y * y
+}
+```
+
+Weaving makes a reading copy that keeps the explanation and code together.
+The default command,
+
+```text
+lw --weave distance.lit
+```
+
+writes an offline HTML page. It numbers the section, typesets the equation in
+the browser, and links `⟨distance.rs 1⟩` to the displayed code definition.
+Selecting the other woven format,
+
+```text
+lw --weave --format latex distance.lit
+```
+
+writes a LaTeX document and Litweb's packaged style. Compiling that document
+with LuaLaTeX produces a PDF with the same section, equation, definition, and
+link. HTML and LaTeX look different because they use different output syntax,
+but they preserve the same authored meaning.
+
+For Rust books, the PDF can also place a small identifier reminder below a
+right-hand page. It lists definitions used on the facing two-page spread when
+those definitions are elsewhere, so a reader can follow the code without
+repeatedly turning to the final index. The LaTeX chapter explains how these
+mini-indexes remain attached to the physical pages where their uses appear.
+
+This book is itself built that way. Its `.lit` chapters are the canonical
+production source, not commentary copied beside the implementation. Named code
+fragments let the book explain an idea where a reader needs it and later
+assemble those fragments into the committed Rust modules under `src/`.
+
+The woven notation makes that assembly visible. `⟨Name 4⟩ ≡` defines a named
+fragment in presentation section 4, `+≡` adds to it, and `:=` replaces its
+current contents. A bare `⟨Name 4⟩` inside code inserts that fragment. Bold
+names are roots: complete files rather than supporting fragments. The linked
+numbers are reading locations, not source line numbers.
+
+The implementation follows one pipeline. Parser records the prose and code
+occurrences in one source file. Book loads the chapters named in a manifest.
+Resolver decides which occurrences define, add to, replace, or use the same
+named block. Tangler follows whole-line references from output roots to plan
+ordinary files. Prose recognizes paragraphs, lists, examples, tables,
+equations, and inline forms, while Identifier locates useful Rust names and
+conservatively associates uses with reliable declaration meanings.
+
+Woven Document then prepares the numbered sections, relationships, and
+identifier locations that every reading copy must preserve, including the
+marker assignments needed by a physical-page index. Weaver renders the shared
+facts as HTML; Book Weaving and Presentation extend the HTML path with multiple
+pages, navigation, offline equations, and syntax highlighting. LaTeX renders
+the same facts as one typeset document and composes Rust mini-indexes on its
+page spreads. Output checks and writes all planned files, and Main connects the
+library stages to the `lw` command.
+
+Read the chapters in that order. Each chapter asks one main question: what did
+the previous stage produce, what new decision is needed, and what exact value
+will the following stage receive?
+
+[Parser](parser.lit)
+[Book](book.lit)
+[Resolver](resolver.lit)
+[Tangler](tangler.lit)
+[Prose](prose.lit)
+[Identifier](identifier.lit)
+[Woven Document](woven.lit)
+[Weaver](weaver.lit)
+[Book Weaving](book_weaving.lit)
+[Presentation](presentation.lit)
+[LaTeX](latex.lit)
+[Output](output.lit)
+[Main](main.lit)

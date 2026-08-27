@@ -1,0 +1,870 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Resolver
+
+@s From Parsed Occurrences to Definitions
+
+Parser preserved every code-block occurrence in the `Greeting` example. Book
+may place several parsed chapters into the same @code{Program}, but it likewise
+leaves their names uncombined. We begin with one file and extend its source
+with three more occurrences of `Greeting line`:
+
+```text
+@title A Greeting
+@s Greeting
+This small program writes one line.
+
+--- hello.txt
+@{Greeting line}
+---
+
+The text comes from a separate named piece.
+
+--- Greeting line
+Hello
+---
+
+--- Greeting line +=
+from Litweb
+---
+
+--- Greeting line :=
+Good morning
+---
+
+--- Greeting line +=
+from Litweb
+---
+```
+
+Parser returns the two unmodified occurrences as **bases**. The other three
+are **changes**: `+=` marks an addition and `:=` marks a replacement.
+
+```text
+parsed code occurrences
+|-- base         "hello.txt"       line 5
+|-- base         "Greeting line"   line 11
+|-- addition     "Greeting line"   line 15
+|-- replacement  "Greeting line"   line 19
+`-- addition     "Greeting line"   line 23
+```
+
+Resolver combines occurrences that share a name. It creates one final
+definition for each base, finds the base affected by each change, and applies
+the changes in source order.
+
+@s The Resolved Greeting
+
+The first addition temporarily leaves `Hello` followed by `from Litweb`. The
+replacement discards both lines and supplies `Good morning`; the last addition
+then appends a new `from Litweb`. The result has two definitions rather than
+five occurrences:
+
+```text
+ResolvedProgram
+|-- blocks[0] "hello.txt"
+|   `-- "@{Greeting line}"        source line 6
+|-- blocks[1] "Greeting line"
+|   |-- "Good morning"            source line 20
+|   `-- "from Litweb"             source line 24
+`-- roots[0] -> blocks[0] -> "hello.txt"
+```
+
+The positions `0` and `1` are stable **definition identities**. Roots and
+name lookups can point to those small indices without copying a definition.
+`hello.txt` is a **root**, a definition selected to name a complete output
+file. `Greeting line` is a supporting definition.
+
+The whole-line `@{Greeting line}` is a **use**. Resolver deliberately leaves
+it as line text. It builds the lookup information by which Tangler can later
+select and expand the definition and Weaver can link the use.
+
+@s Resolving in Two Passes
+
+Resolution uses two passes. The first pass walks the parsed occurrences in
+source order:
+
+1. `hello.txt` becomes `blocks[0]` and `roots[0]`, and its name maps to block
+   index 0.
+2. The base `Greeting line` becomes `blocks[1]`, with its name mapped to index
+   1.
+3. The addition, replacement, and last addition are retained for later.
+
+The second pass applies those retained changes in their source order. For
+`blocks[1]`, the line state changes from `Hello`, to `Hello` plus
+`from Litweb`, to `Good morning`, and finally to the two lines shown in the
+resolved tree.
+
+This separation matters because Litweb permits a change to appear before its
+base. By the second pass, every valid base and lookup entry is already known,
+but the changes still run in the order authored.
+
+--- Resolve program
+pub fn resolve(program: &Program) -> Result<ResolvedProgram, ResolveErrors> {
+    @{Initialize resolution indexes}
+    @{Collect definitions roots and changes}
+    @{Apply changes in source order}
+    @{Finish resolution}
+}
+---
+
+@s The Resolver Module
+
+The generated module owns the resolved model, the @code{resolve} operation,
+name lookup, root recognition, portable path validation, and the semantic
+errors that can prevent a complete result.
+
+--- src/resolver.rs
+//! Definition resolution and ordered root discovery.
+
+@{Resolver imports}
+@{Resolved definitions}
+@{Resolved roots}
+@{Resolved program indexes}
+@{Resolved name lookup}
+@{Kinds of definition change}
+@{Resolution error model}
+@{Portable path rejection reasons}
+@{Render one resolution error}
+@{Resolution error collection}
+@{Resolve program}
+@{Look up a definition during resolution}
+@{Record a resolution error in discovery order}
+@{Recognize a root name}
+@{Validate a portable relative path}
+---
+
+Resolver uses hash maps only for name and path selection; ordered vectors
+retain the source and root order. Path components support portable validation,
+and Parser supplies the located occurrences that Resolver receives.
+
+--- Resolver imports
+use std::collections::HashMap;
+use std::fmt;
+use std::path::{Component, Path, PathBuf};
+
+use crate::parser::{BlockKind, Line, Modifier, Program, SourceOrigin};
+---
+
+@s Definitions, Changes, Uses, and Roots
+
+The example illustrates the four roles. A base creates a definition identity.
+An addition appends lines to that definition; a redefinition replaces its
+current lines. A use is a whole-line reference that a later stage can look up.
+A root is an ordinary definition that also supplies a validated relative
+output path.
+
+The first `Greeting line` occurrence is therefore both a parsed block and the
+base of `blocks[1]`. Its three changes remain separate parsed occurrences, but
+they do not receive more positions in @code{ResolvedProgram.blocks}. Their
+surviving lines become part of the one resolved definition.
+
+@code{ChangeKind} lets the two-pass implementation and its diagnostics carry
+the difference between addition and replacement explicitly.
+
+--- Kinds of definition change
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    Addition,
+    Redefinition,
+}
+
+impl fmt::Display for ChangeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Addition => f.write_str("add to"),
+            Self::Redefinition => f.write_str("redefine"),
+        }
+    }
+}
+---
+
+@s The Resolved Model
+
+@code{ResolvedBlock} stores one accepted base and its final lines. In the
+running example the two values appear in the source order of the
+`hello.txt` and `Greeting line` bases. Changes update lines but never insert
+another definition identity. The base's comment pattern and @code{noHeader}
+choice travel with the final definition for Tangler.
+
+--- Resolved definitions
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedBlock {
+    pub chapter: usize,
+    pub name: String,
+    pub origin: SourceOrigin,
+    pub lines: Vec<Line>,
+    pub(crate) line_chapters: Vec<usize>,
+    pub comment_string: String,
+    pub no_header: bool,
+}
+---
+
+A root does not copy its definition. It points to one stable block index and
+adds the validated path and the origin of the base that requested the output.
+Thus `roots[0].block == 0` selects the `hello.txt` definition shown above.
+
+--- Resolved roots
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRoot {
+    pub block: usize,
+    pub path: PathBuf,
+    pub origin: SourceOrigin,
+}
+---
+
+The complete program owns those ordered definitions and roots. It also owns
+one local name map per chapter and a book-wide map from each name to all
+matching block indices. Those maps answer selection questions without
+controlling the order of definitions or outputs.
+
+--- Resolved program indexes
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedProgram {
+    pub blocks: Vec<ResolvedBlock>,
+    pub roots: Vec<ResolvedRoot>,
+    local_lookup: Vec<HashMap<String, usize>>,
+    by_name: HashMap<String, Vec<usize>>,
+}
+---
+
+@s Discovering Output Roots
+
+The running example's `hello.txt` base becomes a root, so `roots[0]` points to
+`blocks[0]`. Root status belongs to the base identity. A change may alter the
+root's final lines, but a change cannot create another root.
+
+Litweb recognizes roots by this filename convention:
+
+- `--- src/main.rs` is an inferred root;
+- `--- nested/output.txt` is another inferred root;
+- `--- "Makefile"` is an explicitly quoted extensionless root; and
+- `--- notes.v1/Algorithm` is not a root merely because its directory has a dot.
+
+Quoting requests a root explicitly. For an unquoted name, Litweb inspects only
+the final path component for a nonempty extension. This convention cannot
+prove the author's intention: a descriptive name such as
+`Algorithm version 1.2` is also inferred to be a root. Weaver keeps the same
+ordered root list because it displays root definitions in bold even when only
+HTML is requested.
+
+--- Recognize a root name
+fn is_root_name(name: &str, quoted: bool) -> bool {
+    quoted
+        || Path::new(name)
+            .file_name()
+            .and_then(|filename| Path::new(filename).extension())
+            .is_some_and(|extension| !extension.is_empty())
+}
+---
+
+@s Portable Root Paths
+
+A root may name a file inside the chosen output directory, but it may not
+escape that directory or depend on platform-specific spelling.
+`generated/main.rs` and `Makefile` are accepted. Absolute paths, `..` or `.`
+components, drive prefixes, backslashes, and trailing separators are rejected
+before expansion.
+
+Resolver checks the path components exactly as written. It does not inspect
+the filesystem or follow symbolic links. The selected output directory is
+therefore trusted; this check prevents unsafe or nonportable source spellings,
+not hostile links already present on disk. Book chapter paths reuse the same
+validator.
+
+--- Validate a portable relative path
+pub fn validate_relative_path(name: &str) -> Result<PathBuf, InvalidPathReason> {
+    if name.is_empty() {
+        return Err(InvalidPathReason::Empty);
+    }
+    if name.ends_with(['/', '\\']) {
+        return Err(InvalidPathReason::TrailingSeparator);
+    }
+    if name.contains('\\') {
+        return Err(InvalidPathReason::Backslash);
+    }
+    let bytes = name.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return Err(InvalidPathReason::WindowsPrefix);
+    }
+
+    let path = Path::new(name);
+    if path.is_absolute() {
+        return Err(InvalidPathReason::Absolute);
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(component) => normalized.push(component),
+            Component::ParentDir => return Err(InvalidPathReason::ParentTraversal),
+            Component::CurDir => return Err(InvalidPathReason::CurrentDirectory),
+            Component::RootDir => return Err(InvalidPathReason::Absolute),
+            Component::Prefix(_) => return Err(InvalidPathReason::WindowsPrefix),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        Err(InvalidPathReason::Empty)
+    } else {
+        Ok(normalized)
+    }
+}
+---
+
+@s Initializing Resolution Indexes
+
+Resolution begins with empty ordered result vectors and one local name map per
+chapter. A book-wide name index supports fallback lookup, while a path map
+detects two roots that request the same destination. The retained-change list
+will receive the three changes from the `Greeting` example.
+
+The error list and sequence counter support deterministic diagnostics without
+changing the order of successful definitions or roots.
+
+--- Initialize resolution indexes
+let mut blocks = Vec::new();
+let mut roots = Vec::new();
+let mut local_lookup = vec![HashMap::new(); program.chapters.len()];
+let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+let mut root_paths = HashMap::new();
+let mut changes = Vec::new();
+let mut errors = Vec::new();
+let mut error_sequence = 0;
+---
+
+@s Collecting Definitions, Roots, and Changes
+
+The first pass visits chapters, semantic sections, and their code blocks in
+source order; prose blocks are skipped. For each base, its current
+@code{blocks.len()} becomes the stable identity inserted into the local and
+book-wide maps. The block's authored lines become the initial resolved lines.
+
+For `hello.txt`, root recognition also validates the path and records
+`roots[0]`. When the pass reaches the three modified `Greeting line`
+occurrences, it retains their chapter, parsed block, code metadata, and change
+kind instead of creating more definitions.
+
+Invalid bases or paths add ordered errors, but they do not disturb the source
+order of accepted definitions.
+
+--- Collect definitions roots and changes
+for (chapter_index, chapter) in program.chapters.iter().enumerate() {
+    for section in &chapter.sections {
+        for block in &section.blocks {
+            let BlockKind::Code(code) = &block.kind else {
+                continue;
+            };
+            let addition = code.modifiers.contains(&Modifier::Additive);
+            let redefinition = code.modifiers.contains(&Modifier::Redefinition);
+            if addition || redefinition {
+                let change = if addition {
+                    ChangeKind::Addition
+                } else {
+                    ChangeKind::Redefinition
+                };
+                if code.modifiers.contains(&Modifier::NoHeader) {
+                    push_ordered_error(
+                        &mut errors,
+                        &mut error_sequence,
+                        chapter_index,
+                        ResolveError {
+                            origin: block.origin.clone(),
+                            kind: ResolveErrorKind::IncompatibleModifier {
+                                name: code.name.clone(),
+                                modifier: "noHeader".to_owned(),
+                            },
+                        },
+                    );
+                }
+                changes.push((chapter_index, block, code, change));
+                continue;
+            }
+
+            if local_lookup[chapter_index].contains_key(&code.name) {
+                push_ordered_error(
+                    &mut errors,
+                    &mut error_sequence,
+                    chapter_index,
+                    ResolveError {
+                        origin: block.origin.clone(),
+                        kind: ResolveErrorKind::DuplicateDefinition {
+                            name: code.name.clone(),
+                        },
+                    },
+                );
+                continue;
+            }
+
+            let index = blocks.len();
+            local_lookup[chapter_index].insert(code.name.clone(), index);
+            by_name.entry(code.name.clone()).or_default().push(index);
+            blocks.push(ResolvedBlock {
+                chapter: chapter_index,
+                name: code.name.clone(),
+                origin: block.origin.clone(),
+                lines: block.lines.clone(),
+                line_chapters: vec![chapter_index; block.lines.len()],
+                comment_string: code.comment_string.clone(),
+                no_header: code.modifiers.contains(&Modifier::NoHeader),
+            });
+
+            if is_root_name(&code.name, code.quoted_name) {
+                match validate_relative_path(&code.name) {
+                    Ok(path) => {
+                        if root_paths
+                            .insert(path.clone(), block.origin.clone())
+                            .is_some()
+                        {
+                            push_ordered_error(
+                                &mut errors,
+                                &mut error_sequence,
+                                chapter_index,
+                                ResolveError {
+                                    origin: block.origin.clone(),
+                                    kind: ResolveErrorKind::DuplicateRootPath {
+                                        path,
+                                    },
+                                },
+                            );
+                        } else {
+                            roots.push(ResolvedRoot {
+                                block: index,
+                                path,
+                                origin: block.origin.clone(),
+                            });
+                        }
+                    }
+                    Err(reason) => push_ordered_error(
+                        &mut errors,
+                        &mut error_sequence,
+                        chapter_index,
+                        ResolveError {
+                            origin: block.origin.clone(),
+                            kind: ResolveErrorKind::InvalidRootPath {
+                                path: PathBuf::from(&code.name),
+                                reason,
+                            },
+                        },
+                    ),
+                }
+            }
+        }
+    }
+}
+
+---
+
+@s Applying Changes in Source Order
+
+The second pass looks up each retained change. In the one-chapter example all
+three select `blocks[1]`. An addition extends the current lines, while a
+replacement assigns a new line vector. The same operation extends or replaces
+the parallel record of which chapter supplied each line.
+
+A missing or ambiguous target records an error and leaves the accepted
+definitions available for the remaining checks, but no partial resolved
+program will be returned.
+
+--- Apply changes in source order
+for (chapter_index, block, code, change) in changes {
+    let index = match lookup_block(&local_lookup, &by_name, chapter_index, &code.name)
+    {
+        BlockLookup::Found(index) => index,
+        BlockLookup::Missing => {
+            push_ordered_error(
+                &mut errors,
+                &mut error_sequence,
+                chapter_index,
+                ResolveError {
+                    origin: block.origin.clone(),
+                    kind: ResolveErrorKind::MissingChangeTarget {
+                        name: code.name.clone(),
+                        change,
+                    },
+                },
+            );
+            continue;
+        }
+        BlockLookup::Ambiguous(indices) => {
+            push_ordered_error(
+                &mut errors,
+                &mut error_sequence,
+                chapter_index,
+                ResolveError {
+                    origin: block.origin.clone(),
+                    kind: ResolveErrorKind::AmbiguousChangeTarget {
+                        name: code.name.clone(),
+                        change,
+                        candidates: indices
+                            .iter()
+                            .map(|index| blocks[*index].origin.clone())
+                            .collect(),
+                    },
+                },
+            );
+            continue;
+        }
+    };
+    match change {
+        ChangeKind::Addition => {
+            blocks[index].lines.extend(block.lines.clone());
+            blocks[index]
+                .line_chapters
+                .extend(std::iter::repeat_n(chapter_index, block.lines.len()));
+        }
+        ChangeKind::Redefinition => {
+            blocks[index].lines = block.lines.clone();
+            blocks[index].line_chapters = vec![chapter_index; block.lines.len()];
+        }
+    }
+}
+
+---
+
+@s Finishing Resolution
+
+Only a completely valid program crosses this boundary. The `Greeting` example
+returns its two blocks, one root, and lookup maps. Otherwise all errors are
+ordered by chapter, source line, and discovery order and returned as one
+collection.
+
+--- Finish resolution
+if errors.is_empty() {
+    Ok(ResolvedProgram {
+        blocks,
+        roots,
+        local_lookup,
+        by_name,
+    })
+} else {
+    errors.sort_by_key(|(chapter, line, sequence, _)| (*chapter, *line, *sequence));
+    Err(ResolveErrors {
+        errors: errors.into_iter().map(|(_, _, _, error)| error).collect(),
+    })
+}
+---
+
+@s Extending Lookup Across a Book
+
+For one file, every resolved line belongs to chapter zero and every name has
+at most one base. A book adds a choice: a common helper name may be defined
+separately in several chapters.
+
+Suppose the English chapter contains:
+
+```text
+@s Greeting
+--- hello.txt
+Hello
+---
+--- Punctuation
+!
+---
+```
+
+The Spanish chapter contains its own `Punctuation` and a change to the
+English root:
+
+```text
+@s Saludo
+--- Punctuation
+¡
+---
+--- hello.txt +=
+@{Punctuation}
+---
+```
+
+Spanish has no local `hello.txt`, so its change finds the one definition with
+that name elsewhere in the book. The added reference has a different lookup
+story: Spanish authored the line, so Tangler later selects Spanish's local
+`Punctuation`, not the equally named English definition.
+
+The combined root therefore carries two kinds of chapter information:
+
+```text
+ResolvedBlock "hello.txt"          base chapter: English
+|-- "Hello"                        line chapter: English
+`-- "@{Punctuation}"               line chapter: Spanish
+```
+
+@code{ResolvedBlock.chapter} records the base chapter. The parallel
+@code{lines} and @code{line_chapters} vectors always have equal length, and
+each chapter entry records who authored the line at the same position.
+
+@s The Local-First Rule
+
+Lookup follows four cases:
+
+- a definition in the line's chapter wins;
+- with no local definition, one definition elsewhere is the unique fallback;
+- with no definition anywhere, the result is missing; and
+- two or more definitions elsewhere are ambiguous.
+
+Candidate identities retain manifest and source order, so an ambiguity is
+reported deterministically. @code{block_named} succeeds only for a globally
+unique name. The general @code{lookup} method returns @code{Found},
+@code{Missing}, or @code{Ambiguous}.
+
+Resolver uses this rule immediately for additions and replacements. It does
+not scan `@{Name}` lines for missing or ambiguous uses. Tangler and Weaver call
+@code{lookup} later when they consume those lines.
+
+--- Resolved name lookup
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockLookup {
+    Found(usize),
+    Missing,
+    Ambiguous(Vec<usize>),
+}
+
+impl ResolvedProgram {
+    pub fn block(&self, index: usize) -> &ResolvedBlock {
+        &self.blocks[index]
+    }
+
+    pub fn block_named(&self, name: &str) -> Option<(usize, &ResolvedBlock)> {
+        match self.by_name.get(name).map(Vec::as_slice) {
+            Some([index]) => Some((*index, &self.blocks[*index])),
+            _ => None,
+        }
+    }
+
+    pub fn lookup(&self, chapter: usize, name: &str) -> BlockLookup {
+        if let Some(index) = self
+            .local_lookup
+            .get(chapter)
+            .and_then(|lookup| lookup.get(name))
+        {
+            return BlockLookup::Found(*index);
+        }
+        match self.by_name.get(name).map(Vec::as_slice) {
+            None | Some([]) => BlockLookup::Missing,
+            Some([index]) => BlockLookup::Found(*index),
+            Some(indices) => BlockLookup::Ambiguous(indices.to_vec()),
+        }
+    }
+}
+---
+
+@s Looking Up During Resolution
+
+The construction-time helper implements the same local-first rule using the
+maps before the final @code{ResolvedProgram} exists.
+
+--- Look up a definition during resolution
+fn lookup_block(
+    local_lookup: &[HashMap<String, usize>],
+    by_name: &HashMap<String, Vec<usize>>,
+    chapter: usize,
+    name: &str,
+) -> BlockLookup {
+    if let Some(index) = local_lookup
+        .get(chapter)
+        .and_then(|lookup| lookup.get(name))
+    {
+        return BlockLookup::Found(*index);
+    }
+    match by_name.get(name).map(Vec::as_slice) {
+        None | Some([]) => BlockLookup::Missing,
+        Some([index]) => BlockLookup::Found(*index),
+        Some(indices) => BlockLookup::Ambiguous(indices.to_vec()),
+    }
+}
+---
+
+@s Resolution Diagnostics
+
+Resolution reports semantic failures that Parser cannot settle: duplicate
+bases in a constructed model, a missing or ambiguous change target,
+incompatible modifiers on a change, invalid root paths, and duplicate output
+destinations. Each error keeps its source origin and any candidate definitions
+needed to explain an ambiguity.
+
+Errors are finally ordered by chapter and source line. Discovery sequence is
+an explicit tie-breaker when several failures occur on the same line.
+
+--- Record a resolution error in discovery order
+fn push_ordered_error(
+    errors: &mut Vec<(usize, usize, usize, ResolveError)>,
+    sequence: &mut usize,
+    chapter: usize,
+    error: ResolveError,
+) {
+    errors.push((chapter, error.origin.line, *sequence, error));
+    *sequence += 1;
+}
+---
+
+The structured error kind preserves those details for library callers.
+
+--- Resolution error model
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveError {
+    pub origin: SourceOrigin,
+    pub kind: ResolveErrorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveErrorKind {
+    DuplicateDefinition {
+        name: String,
+    },
+    MissingChangeTarget {
+        name: String,
+        change: ChangeKind,
+    },
+    AmbiguousChangeTarget {
+        name: String,
+        change: ChangeKind,
+        candidates: Vec<SourceOrigin>,
+    },
+    IncompatibleModifier {
+        name: String,
+        modifier: String,
+    },
+    InvalidRootPath {
+        path: PathBuf,
+        reason: InvalidPathReason,
+    },
+    DuplicateRootPath {
+        path: PathBuf,
+    },
+}
+---
+
+Path validation likewise returns a structured rejection reason that Resolver
+can place inside a source-located error.
+
+--- Portable path rejection reasons
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidPathReason {
+    Empty,
+    Absolute,
+    ParentTraversal,
+    CurrentDirectory,
+    TrailingSeparator,
+    Backslash,
+    WindowsPrefix,
+}
+
+impl fmt::Display for InvalidPathReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("the path is empty"),
+            Self::Absolute => f.write_str("absolute paths are not allowed"),
+            Self::ParentTraversal => f.write_str("parent traversal is not allowed"),
+            Self::CurrentDirectory => {
+                f.write_str("current-directory components are not allowed")
+            }
+            Self::TrailingSeparator => {
+                f.write_str("the path ends with a directory separator")
+            }
+            Self::Backslash => f.write_str("backslash paths are not portable"),
+            Self::WindowsPrefix => f.write_str("Windows path prefixes are not allowed"),
+        }
+    }
+}
+---
+
+The display form adds that origin and turns each kind into a concise boundary
+message.
+
+--- Render one resolution error
+impl fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: error: ", self.origin)?;
+        match &self.kind {
+            ResolveErrorKind::DuplicateDefinition { name } => {
+                write!(f, "duplicate definition of {{{name}}}")
+            }
+            ResolveErrorKind::MissingChangeTarget { name, change } => {
+                write!(f, "cannot {change} {{{name}}} because it is not defined")
+            }
+            ResolveErrorKind::AmbiguousChangeTarget {
+                name,
+                change,
+                candidates,
+            } => {
+                write!(
+                    f,
+                    "cannot {} {{{}}} because it is ambiguous; definitions are at {}",
+                    change,
+                    name,
+                    candidates
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            ResolveErrorKind::IncompatibleModifier { name, modifier } => {
+                write!(
+                    f,
+                    "modifier {modifier} does not apply to the change block {{{name}}}"
+                )
+            }
+            ResolveErrorKind::InvalidRootPath { path, reason } => {
+                write!(f, "invalid root path {}: {reason}", path.display())
+            }
+            ResolveErrorKind::DuplicateRootPath { path } => {
+                write!(f, "more than one root writes {}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ResolveError {}
+---
+
+Resolver returns all discovered failures together. The aggregate exposes the
+complete ordered collection; its short display shows the first error and
+reports how many remain.
+
+--- Resolution error collection
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveErrors {
+    errors: Vec<ResolveError>,
+}
+
+impl ResolveErrors {
+    pub fn as_slice(&self) -> &[ResolveError] {
+        &self.errors
+    }
+
+    pub fn into_vec(self) -> Vec<ResolveError> {
+        self.errors
+    }
+}
+
+impl fmt::Display for ResolveErrors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(first) = self.errors.first() {
+            write!(f, "{first}")?;
+            if self.errors.len() > 1 {
+                write!(f, " (and {} more resolution errors)", self.errors.len() - 1)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ResolveErrors {}
+---
+
+@s Handoff to Tangler and Weaver
+
+For the running example, Resolver hands forward two final definitions,
+`hello.txt` as the one ordered root, and lookup entries that connect
+`Greeting line` to `blocks[1]`. The surviving reference in `hello.txt` is
+still the exact source line `@{Greeting line}`.
+
+Tangler will follow that reference and assemble `Good morning` followed by
+`from Litweb` as the authored bytes of `hello.txt`. Weaver will connect the
+same stable identity to the parsed base, addition, replacement, final
+addition, and visible use. In a book, both stages also receive the authoring
+chapter beside every final line.
+
+Neither stage needs to collect bases, apply changes, discover roots, or rebuild
+the lookup indexes.

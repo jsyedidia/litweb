@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Presentation Sections</title>
+<style>
+body {
+    color: #222;
+    background: #fff;
+    font-family: Georgia, serif;
+    line-height: 1.5;
+    margin: 0;
+}
+main {
+    max-width: 56rem;
+    margin: 0 auto;
+    padding: clamp(0.75rem, 4vw, 2rem);
+}
+.section {
+    margin: 2.5rem 0;
+}
+.section-heading {
+    font-size: 1rem;
+    margin: 0 0 1rem;
+}
+.section-opening > .section-heading,
+.section-opening > p,
+.section-opening > .codeblock_name {
+    display: inline;
+    margin: 0;
+}
+.section-number,
+.chapter-number,
+.definition-operator {
+    white-space: nowrap;
+}
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.codeblock {
+    margin: 1.25rem 0;
+}
+.codeblock-first {
+    margin-top: 0;
+}
+.codeblock_name {
+    margin-left: min(1rem, 3vw);
+    font-family: monospace;
+    overflow-wrap: anywhere;
+}
+.section-opening > .codeblock_name {
+    margin-left: 0;
+}
+.definition-operator {
+    font-family: Georgia, serif;
+}
+code {
+    white-space: pre-wrap;
+}
+pre code {
+    white-space: inherit;
+}
+pre {
+    overflow-x: auto;
+    border: 1px solid #d8d8d8;
+    background: #f7f7f7;
+    padding: 0.8rem 1rem;
+    line-height: 1.35;
+}
+.table-scroll {
+    overflow-x: auto;
+    margin: 1.25rem 0;
+}
+.table-scroll table {
+    border-collapse: collapse;
+    width: max-content;
+    min-width: 100%;
+}
+.table-scroll th,
+.table-scroll td {
+    border: 1px solid #d8d8d8;
+    padding: 0.45rem 0.7rem;
+    vertical-align: top;
+}
+.table-scroll th {
+    background: #f7f7f7;
+}
+.table-align-left {
+    text-align: left;
+}
+.table-align-center {
+    text-align: center;
+}
+.table-align-right {
+    text-align: right;
+}
+.nocode {
+    color: #555;
+    font-style: italic;
+}
+.seealso {
+    margin: 0.2rem 0 0 min(1rem, 3vw);
+    font-size: 0.9rem;
+    color: #555;
+}
+.section-name a,
+.section-reference a,
+.nocode a,
+.seealso a {
+    text-decoration: none;
+}
+.section-name a:focus-visible,
+.section-reference a:focus-visible,
+.nocode a:focus-visible,
+.seealso a:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+a {
+    color: #245b8a;
+}
+.identifier-index {
+    margin: 3rem 0 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid #d8d8d8;
+    font-family: Arial, Helvetica, sans-serif;
+    font-variant-numeric: lining-nums tabular-nums;
+}
+.identifier-index dl {
+    display: grid;
+    grid-template-columns: minmax(8rem, 14rem) 1fr;
+    gap: 0.25rem 1rem;
+}
+.identifier-index dt,
+.identifier-index dd {
+    margin: 0;
+}
+.identifier-index dt {
+    overflow-wrap: anywhere;
+}
+.identifier-index dd {
+    font-size: 0.875em;
+}
+.identifier-index a {
+    text-decoration: none;
+}
+.identifier-index a.identifier-definition {
+    text-decoration: underline;
+    text-decoration-thickness: 0.12em;
+    text-underline-offset: 0.12em;
+    text-decoration-skip-ink: none;
+}
+.identifier-index a:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+@media (max-width: 36rem) {
+    .identifier-index dl {
+        grid-template-columns: 1fr;
+    }
+    .identifier-index dd {
+        margin-bottom: 0.5rem;
+    }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>Presentation Sections</h1>
+<section class="section" id="1:1">
+<h2 class="section-heading"><span class="section-number">1.</span> <span class="section-title">Empty explicit section</span>.</h2>
+</section>
+<section class="section" id="1:2">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">2.</span> <span class="visually-hidden">Untitled section</span></h2>
+</section>
+<section class="section" id="1:3">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">3.</span> <span class="section-title">Prose only</span>.</h2>
+<p>This section contains prose and no code.</p>
+</div>
+</section>
+<section class="section" id="1:4">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">4.</span> <span class="section-title">Code only</span>.</h2>
+<div class="codeblock_name"><span class="section-name">⟨Code only <a href="#1:4" aria-label="section 4">4</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre><code>code_only();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:5">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">5.</span> <span class="section-title">Prose and code</span>.</h2>
+<p>The prose and code share one presentation section.</p>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span class="section-name">⟨Prose and code <a href="#1:5" aria-label="section 5">5</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre><code>prose_and_code();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:6">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">6.</span> <span class="section-title">Prose after code</span>.</h2>
+<p>The first prose block.</p>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span class="section-name">⟨Prose then code <a href="#1:6" aria-label="section 6">6</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre><code>first();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:7">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">7.</span> <span class="visually-hidden">Untitled section</span></h2>
+<p>The second prose block starts an implicit section.</p>
+</div>
+</section>
+<section class="section" id="1:8">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">8.</span> <span class="section-title">Prose and consecutive code</span>.</h2>
+<p>The prose accompanies the first code block.</p>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span class="section-name">⟨Prose code one <a href="#1:8" aria-label="section 8">8</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre><code>one();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:9">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">9.</span> <span class="visually-hidden">Untitled section</span></h2>
+<div class="codeblock_name"><span class="section-name">⟨Prose code two <a href="#1:9" aria-label="section 9">9</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre><code>two();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:10">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">10.</span> <span class="section-title">Code prose code</span>.</h2>
+<div class="codeblock_name"><span class="section-name">⟨Code prose first <a href="#1:10" aria-label="section 10">10</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre><code>first();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:11">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">11.</span> <span class="visually-hidden">Untitled section</span></h2>
+<p>The prose after code starts another presentation section.</p>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span class="section-name">⟨Code prose second <a href="#1:11" aria-label="section 11">11</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre><code>second();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:12">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">12.</span> <span class="section-title">Three code blocks</span>.</h2>
+<div class="codeblock_name"><span class="section-name">⟨Three one <a href="#1:12" aria-label="section 12">12</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre><code>one();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:13">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">13.</span> <span class="visually-hidden">Untitled section</span></h2>
+<div class="codeblock_name"><span class="section-name">⟨Three two <a href="#1:13" aria-label="section 13">13</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre><code>two();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:14">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">14.</span> <span class="visually-hidden">Untitled section</span></h2>
+<div class="codeblock_name"><span class="section-name">⟨Three three <a href="#1:14" aria-label="section 14">14</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre><code>three();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:15">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">15.</span> <span class="section-title">Hidden blocks and commands</span>.</h2>
+<p>Visible prose precedes hidden and visible code.</p>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span class="section-name">⟨Visible after hidden <a href="#1:15" aria-label="section 15">15</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre class="language-rust"><code class="language-rust">visible();
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:16">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">16.</span> <span class="section-title">Hidden code between prose blocks</span>.</h2>
+<p>First visible prose.</p>
+</div>
+</section>
+<section class="section" id="1:17">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">17.</span> <span class="visually-hidden">Untitled section</span></h2>
+<p>Second visible prose still starts an implicit section.</p>
+</div>
+</section>
+<section class="section" id="1:18">
+<h2 class="section-heading"><span class="section-number">18.</span> <span class="section-title">Hidden-only explicit section</span>.</h2>
+</section>
+<section class="section" id="1:19">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">19.</span> <span class="section-title">Relationships</span>.</h2>
+<p>The forward prose reference <code class="section-reference">⟨Target <a href="#1:19" aria-label="section 19">19</a>⟩</code> links to the first visible definition.</p>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span class="section-name">⟨Target <a href="#1:19" aria-label="section 19">19</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre><code>base();
+</code></pre>
+<p class="seealso">See also section <a href="#1:20" aria-label="section 20">20</a>.</p>
+<p class="seealso">This code is replaced in section <a href="#1:21" aria-label="section 21">21</a>.</p>
+<p class="seealso">This code is used in section <a href="#1:22" aria-label="section 22">22</a>.</p>
+</div>
+</section>
+<section class="section" id="1:20">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">20.</span> <span class="visually-hidden">Untitled section</span></h2>
+<div class="codeblock_name"><span class="section-name">⟨Target <a href="#1:19" aria-label="section 19">19</a>⟩</span> <span class="definition-operator" aria-label="is continued by">+≡</span></div>
+</div>
+<pre><code>addition();
+</code></pre>
+<p class="seealso">This code is replaced in section <a href="#1:21" aria-label="section 21">21</a>.</p>
+<p class="seealso">This code is used in section <a href="#1:22" aria-label="section 22">22</a>.</p>
+</div>
+</section>
+<section class="section" id="1:21">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">21.</span> <span class="visually-hidden">Untitled section</span></h2>
+<div class="codeblock_name"><span class="section-name">⟨Target <a href="#1:19" aria-label="section 19">19</a>⟩</span> <span class="definition-operator" aria-label="is replaced by">:=</span></div>
+</div>
+<pre><code>replacement();
+</code></pre>
+<p class="seealso">See also section <a href="#1:20" aria-label="section 20">20</a>.</p>
+<p class="seealso">This code is used in section <a href="#1:22" aria-label="section 22">22</a>.</p>
+</div>
+</section>
+<section class="section" id="1:22">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">22.</span> <span class="visually-hidden">Untitled section</span></h2>
+<div class="codeblock_name"><span class="section-name">⟨Use target <a href="#1:22" aria-label="section 22">22</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre><code><span class="nocode">⟨Target <a href="#1:19" aria-label="section 19">19</a>⟩</span>
+</code></pre>
+</div>
+</section>
+<section class="identifier-index" aria-labelledby="identifier-index-title">
+<h2 id="identifier-index-title">Identifier Index</h2>
+<dl>
+<dt><code>visible</code></dt>
+<dd><a href="#1:15" aria-label="section 15">15</a></dd>
+</dl>
+</section>
+</main>
+</body>
+</html>

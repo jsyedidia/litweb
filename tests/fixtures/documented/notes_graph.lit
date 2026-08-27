@@ -1,0 +1,26 @@
+@code_type rust .rs
+@s Notes
+Call @code{parse_str()} before continuing.
+
+```text
+@s Not a section
+--- Not a block
+@code{not_rust()}
+```
+
+Name | Example
+--- | ---
+type | @code{Graph}
+
+--- graph.rs
+struct Graph {
+    vertex_count: usize,
+}
+
+fn make_graph(initial_count: usize) -> Graph {
+    let graph = Graph {
+        vertex_count: initial_count,
+    };
+    graph
+}
+---

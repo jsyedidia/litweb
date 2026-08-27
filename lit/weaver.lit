@@ -1,0 +1,1450 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Weaver
+
+@s From Prepared Meaning to HTML
+
+Woven Document prepared the `Distance` example as one numbered section with
+a title, a paragraph, an equation, a named-block reference, and its code
+definition. The HTML backend now chooses browser notation for those facts. Its
+central result has this shape:
+
+```html
+<section class="section" id="1:1">
+  <h2>1. Squared Distance.</h2>
+  <p>
+    The formula
+    <span class="litweb-math litweb-math-inline">d^2 = x^2 + y^2</span>
+    gives the squared distance.
+    The implementation is in <a href="#1:1">⟨distance.rs 1⟩</a>.
+  </p>
+  <pre><code>fn squared_distance(x: f64, y: f64) -&gt; f64 { ... }</code></pre>
+</section>
+```
+
+The real output keeps the fuller accessible named-block notation and CSS
+classes explained later, but the shared facts are already visible here. The
+presentation number became both a heading and an anchor. The block reference
+became a link to that anchor. The equation source became a marked fallback
+that Presentation can later typeset with local KaTeX. Authored text and code
+are escaped for HTML rather than allowed to become markup.
+
+This chapter follows the HTML renderer from those prepared facts to one safe
+linked page. The richer `Greeting` document from Woven Document supplies the
+later addition, replacement, use, and relationship examples. Book Weaving
+then divides a book among several HTML pages, and Presentation surrounds those
+page bodies with offline styles, equations, and syntax highlighting.
+
+@s Three HTML Chapters, One Module
+
+Weaver, Book Weaving, and Presentation generate one Rust module because they
+cooperate on HTML pages, navigation, and browser assets. The module root keeps
+their declarations in compiler order; the woven explanation introduces each
+definition where its HTML job becomes useful.
+
+--- src/weaver.rs
+//! Deterministic HTML generation from parsed `.lit` programs.
+
+@{Weaver imports}
+@{Weaver public results}
+@{Weaver planning}
+@{Weaver document rendering}
+@{Weaver prose code and relationships}
+@{Weaver HTML support and styles}
+---
+
+
+@s Complete Results or Structured Errors
+
+The public group contains the options, successful plan, and structured
+failures. The planning function itself appears in Presentation, after all of
+its operations have acquired a concrete meaning.
+
+--- Weaver public results
+@{Weave options}
+@{Weave plan}
+@{Weave plan failures}
+@{Weave errors}
+---
+
+@s The Weave Plan
+
+A successful weave plan is the ordered set of complete output files. HTML
+pages come first. When a page uses equations or highlighting, versioned
+JavaScript, CSS, fonts, licenses, and provenance files follow. Output receives
+the plan only after every page and required asset has been prepared; a fatal
+weave error returns no partial plan.
+
+--- Weave plan
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeavePlan {
+    pub outputs: Vec<PlannedOutput>,
+}
+---
+
+@s Choosing a Single-Page Output Name
+
+For an ordinary input, the page name is easy to predict:
+`greeting.lit` becomes `greeting.html`. Weaver stores that destination as a
+portable relative path in the planned output. An input without a usable stem
+is rejected here, before Output can write anything.
+
+--- Choose a single-page output name
+
+fn html_output_name(program: &Program) -> Result<PathBuf, WeaveError> {
+    let path = Path::new(&program.file);
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| WeaveError {
+            origin: program.origin.clone(),
+            kind: WeaveErrorKind::InvalidOutputName,
+        })?;
+    Ok(PathBuf::from(format!("{stem}.html")))
+}
+---
+
+@s Building Pages from Smaller Renderers
+
+The document group begins with the one-file page below. Book Weaving later
+adds contents, chapter, navigation, and book-index renderers without changing
+the presentation-section walk.
+
+--- Weaver document rendering
+@{Render one-file HTML}
+@{Render the identifier index}
+@{Render a book contents page}
+@{Render a book chapter page}
+@{Render a book identifier index}
+@{Open a book HTML document}
+@{Render presentation sections}
+@{Render a presentation-section heading}
+@{Render the book contents list}
+@{Render the contents identifier-index link}
+@{Render book navigation}
+---
+
+@s Rendering One-File HTML
+
+The renderer builds the page from the inside out. It first creates `body`,
+adds the `A Greeting` title, walks the five presentation sections, and appends
+the optional identifier index. Only then does it place that finished body
+inside the HTML document.
+
+For a one-file program, the chapter loop naturally runs once. Nothing is
+written to disk: the returned `String` becomes the bytes of a
+`PlannedOutput`. Presentation will explain the surrounding style, math, and
+highlighting choices after the page body is understood.
+
+--- Render one-file HTML
+fn render_document(
+    program: &Program,
+    data: &WeaveData<'_>,
+    identifiers: &LocatedIdentifierIndex,
+    output_path: &Path,
+    color_scheme: &PageColorScheme,
+    errors: &mut Vec<WeaveError>,
+) -> String {
+    let mut body = String::new();
+    body.push_str("<h1>");
+    push_escaped_text(&mut body, &program.title);
+    body.push_str("</h1>\n");
+
+    for (chapter_index, chapter) in program.chapters.iter().enumerate() {
+        let context = RenderContext {
+            current_chapter: Some(chapter_index),
+            current_path: output_path,
+            single_page: true,
+            highlighting: color_scheme.css().is_some(),
+            book_paths: None,
+        };
+        render_chapter_sections(
+            &mut body,
+            chapter,
+            &data.layout.chapters[chapter_index],
+            &context,
+            data.resolved,
+            data.index,
+            errors,
+        );
+    }
+
+    render_identifier_index(&mut body, identifiers);
+    let uses_math = page_contains_math(&body);
+    let highlight_scheme = page_contains_highlighting(&body).then_some(color_scheme);
+    let mut output = String::new();
+    output.push_str("<!doctype html>\n");
+    render_html_element_open(&mut output, uses_math, highlight_scheme.is_some());
+    output.push_str("<head>\n");
+    output.push_str("<meta charset=\"utf-8\">\n");
+    output.push_str(
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
+    );
+    output.push_str("<title>");
+    push_escaped_text(&mut output, &program.title);
+    output.push_str("</title>\n");
+    if uses_math {
+        render_math_stylesheet_link(&mut output, output_path);
+    }
+    output.push_str("<style>\n");
+    output.push_str(DEFAULT_STYLE);
+    if uses_math {
+        output.push_str(MATH_STYLE);
+    }
+    if !identifiers.entries.is_empty() {
+        output.push_str(IDENTIFIER_STYLE);
+    }
+    if let Some(scheme) = highlight_scheme {
+        render_highlight_theme_css(&mut output, scheme);
+    }
+    output.push_str("</style>\n");
+    if uses_math {
+        render_math_scripts(&mut output, output_path);
+    }
+    if highlight_scheme.is_some() {
+        render_highlight_scripts(&mut output, output_path);
+    }
+    output.push_str("</head>\n<body>\n<main>\n");
+    output.push_str(&body);
+    output.push_str("</main>\n</body>\n</html>\n");
+    output
+}
+---
+
+@s Rendering the Identifier Index
+
+The `Notes` example contributes one `Graph` location, so the single-file
+identifier index includes one term and one link to its shared presentation
+section. Because Identifier found a definition there, the link is underlined
+and its accessible label says “definition in section 1.” A reader does not
+need to infer that stronger role from color.
+
+The general index is an HTML definition list appended after the program. Each
+term is followed by its deduplicated presentation-section links. An empty
+source index adds nothing.
+
+--- Render the identifier index
+fn render_identifier_index(output: &mut String, index: &LocatedIdentifierIndex) {
+    if index.entries.is_empty() {
+        return;
+    }
+
+    output.push_str(concat!(
+        "<section class=\"identifier-index\" ",
+        "aria-labelledby=\"identifier-index-title\">\n",
+        "<h2 id=\"identifier-index-title\">Identifier Index</h2>\n<dl>\n",
+    ));
+    for entry in &index.entries {
+        output.push_str("<dt><code>");
+        push_escaped_text(output, &entry.name);
+        output.push_str("</code></dt>\n<dd>");
+        for (position, occurrence) in entry.locations.iter().enumerate() {
+            if position > 0 {
+                output.push_str(", ");
+            }
+            let label = occurrence.location.section.to_string();
+            output.push_str("<a");
+            if occurrence.role == IdentifierRole::Definition {
+                output.push_str(" class=\"identifier-definition\"");
+            }
+            output.push_str(" href=\"#");
+            push_escaped_attribute(output, &occurrence.location.anchor());
+            output.push_str("\" aria-label=\"");
+            if occurrence.role == IdentifierRole::Definition {
+                output.push_str("definition in section ");
+            } else {
+                output.push_str("section ");
+            }
+            push_escaped_attribute(output, &label);
+            output.push_str("\">");
+            push_escaped_text(output, &label);
+            output.push_str("</a>");
+        }
+        output.push_str("</dd>\n");
+    }
+    output.push_str("</dl>\n</section>\n");
+}
+---
+
+@s Inside One Reading Section
+
+Within each presentation section, small renderers handle the heading, prose,
+code title and body, and relationship notes. Their grouping keeps one
+top-level walk while letting each HTML form enforce its own safety and
+structure.
+
+--- Weaver prose code and relationships
+@{Render a prose block}
+@{Render a section-opening paragraph}
+@{Render prose contents}
+@{Render a prose table}
+@{Recognize inline prose math}
+@{Render a math placeholder}
+@{Scan inline Markdown}
+@{Render a prose code reference}
+@{Render a section name}
+@{Render a code block}
+@{Render a code-block title}
+@{Render code-block contents}
+@{Choose a code language class}
+@{Find a visible definition location}
+@{Render one section-location link}
+@{Code relationship wording}
+@{Render relationship locations}
+---
+
+@s Rendering a Presentation Section
+
+Section 1 of `Greeting` has both ordinary paragraph prose and the `hello.txt`
+root. Its number, title, and first paragraph share a visual opening; the root
+follows as block content. Section 2 has the same shape but no repeated
+semantic title. Sections 3–5 begin directly with code, so each heading and
+code title share an opening and the code body begins below.
+
+Every presentation section still has a semantic `h2`. A list begins below its
+heading rather than being squeezed into an inline sentence, and later prose
+and code remain ordinary block content.
+
+These branches explain the `section-opening` wrapper: it gives the browser a
+continuous visual opening without weakening the heading hierarchy. The source
+section title appears only when `source_section_start` is true.
+
+--- Render presentation sections
+fn render_chapter_sections(
+    output: &mut String,
+    chapter: &Chapter,
+    sections: &[WeaveSection],
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    for section in sections {
+        let source_section = &chapter.sections[section.source_section];
+        let _ = writeln!(
+            output,
+            "<section class=\"section\" id=\"{}\">",
+            section.location.anchor()
+        );
+        let prose = section.prose.map(|block| &source_section.blocks[block]);
+        let code = section.code.map(|block| &source_section.blocks[block]);
+
+        if let Some(prose) = prose.filter(|block| prose_starts_with_paragraph(block)) {
+            output.push_str("<div class=\"section-opening\">\n");
+            render_section_heading(output, section, source_section);
+            let next_line = render_first_prose_paragraph(
+                output, prose, context, resolved, index, errors,
+            );
+            output.push_str("</div>\n");
+            render_prose_from(output, prose, next_line, context, resolved, index, errors);
+            if let Some(code) = code {
+                render_code_block(
+                    output,
+                    code,
+                    &section.location,
+                    context,
+                    resolved,
+                    index,
+                    errors,
+                );
+            }
+        } else if prose.is_none()
+            && let Some(code) = code
+        {
+            output.push_str(concat!(
+                "<div class=\"codeblock codeblock-first\">\n",
+                "<div class=\"section-opening\">\n",
+            ));
+            render_section_heading(output, section, source_section);
+            render_code_block_name(
+                output,
+                code,
+                &section.location,
+                context,
+                resolved,
+                index,
+                errors,
+            );
+            output.push_str("</div>\n");
+            render_code_block_contents(
+                output,
+                code,
+                &section.location,
+                context,
+                resolved,
+                index,
+                errors,
+            );
+            output.push_str("</div>\n");
+        } else {
+            render_section_heading(output, section, source_section);
+            if let Some(prose) = prose {
+                render_prose(output, prose, context, resolved, index, errors);
+            }
+            if let Some(code) = code {
+                render_code_block(
+                    output,
+                    code,
+                    &section.location,
+                    context,
+                    resolved,
+                    index,
+                    errors,
+                );
+            }
+        }
+        output.push_str("</section>\n");
+    }
+}
+---
+
+@s Rendering a Presentation-Section Heading
+
+The first derived section shows the source section's title with conservative
+punctuation. Continuations keep the same semantic heading level but display
+only the number and supply hidden wording for screen readers.
+
+--- Render a presentation-section heading
+fn render_section_heading(output: &mut String, section: &WeaveSection, source: &Section) {
+    if section.source_section_start && !source.title.is_empty() {
+        let _ = write!(
+            output,
+            concat!(
+                "<h2 class=\"section-heading\"><span class=\"section-number\">",
+                "{}.</span> <span class=\"section-title\">",
+            ),
+            section.location.section
+        );
+        push_escaped_text(output, &source.title);
+        output.push_str("</span>");
+        if !matches!(source.title.chars().last(), Some('.' | '?' | '!')) {
+            output.push('.');
+        }
+        output.push_str("</h2>\n");
+    } else {
+        let _ = writeln!(
+            output,
+            concat!(
+                "<h2 class=\"section-heading section-heading-untitled\">",
+                "<span class=\"section-number\">{}.</span> ",
+                "<span class=\"visually-hidden\">Untitled section</span></h2>",
+            ),
+            section.location.section
+        );
+    }
+}
+---
+
+@s Rendering a Section-Opening Paragraph
+
+The common prose classifier decides whether the first element is a paragraph.
+If so, Weaver renders that exact range inside the visual opening and resumes
+with the following element. A list, example, or display equation instead stays
+below the heading, where its block structure remains valid HTML.
+
+--- Render a section-opening paragraph
+fn prose_starts_with_paragraph(block: &Block) -> bool {
+    matches!(
+        prose_block(&block.lines, 0),
+        Some(ProseBlock::Paragraph { .. })
+    )
+}
+
+fn render_first_prose_paragraph(
+    output: &mut String,
+    block: &Block,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) -> usize {
+    let Some(ProseBlock::Paragraph { start, end }) = prose_block(&block.lines, 0) else {
+        unreachable!("the layout selected an opening paragraph");
+    };
+    render_paragraph(output, block, start..end, context, resolved, index, errors);
+    end
+}
+---
+
+@s Prose Blocks
+
+Block-level prose supports the forms below. The classifier has already found
+the source extent of each element. Weaver's task here is narrower: render that
+element as HTML, using the inline scanner only where the source is meant to be
+interpreted.
+
+| Source form | Woven structure |
+| :--- | :--- |
+| ordinary lines | paragraph |
+| `- ` or `N. ` items | flat list |
+| backtick or tilde fence | fixed-width example |
+| header and hyphen-delimiter rows | table |
+| `$$` delimiters | display equation |
+
+Rendering does not widen the subset established by Prose. Text that Prose
+leaves inside a paragraph still passes through the safe inline path.
+
+--- Render a prose block
+fn render_prose(
+    output: &mut String,
+    block: &Block,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    render_prose_from(output, block, 0, context, resolved, index, errors);
+}
+---
+
+@s Rendering Prose Contents
+
+The loop asks for one classified element at a time. A paragraph or one list
+item becomes a single inline scope: its authored newlines stay in the text,
+and the start of each line retains its source origin. This lets a pair of
+emphasis marks surround words on adjacent lines without making a reference on
+the second line report the first line's location. A table cell remains its
+own one-line scope. Display TeX goes to the math placeholder, while a fence
+takes the literal path described next.
+
+--- Render prose contents
+
+fn render_prose_from(
+    output: &mut String,
+    block: &Block,
+    mut line: usize,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    while let Some(element) = prose_block(&block.lines, line) {
+        line = element.end();
+        match element {
+            ProseBlock::Paragraph { start, end } => {
+                render_paragraph(
+                    output,
+                    block,
+                    start..end,
+                    context,
+                    resolved,
+                    index,
+                    errors,
+                );
+            }
+            ProseBlock::List { list, .. } => {
+                render_prose_list(output, block, &list, context, resolved, index, errors);
+            }
+            ProseBlock::Fence(fence) => {
+                render_fenced_prose(output, block, &fence, context);
+            }
+            ProseBlock::Table(table) => {
+                render_prose_table(
+                    output, block, &table, context, resolved, index, errors,
+                );
+            }
+            ProseBlock::DisplayMath { source, .. } => {
+                render_math_placeholder(
+                    output,
+                    &MathFragment {
+                        kind: MathKind::Display,
+                        source,
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn render_paragraph(
+    output: &mut String,
+    block: &Block,
+    lines: std::ops::Range<usize>,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    output.push_str("<p>");
+    let mut source = InlineSource::new();
+    for line in lines {
+        source.push_line(&block.lines[line].text, &block.lines[line].origin);
+    }
+    render_inline_source(output, &source, context, resolved, index, errors);
+    output.push_str("</p>\n");
+}
+
+fn render_prose_list(
+    output: &mut String,
+    block: &Block,
+    list: &ProseList,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    if let Some(start) = list.ordered_start {
+        output.push_str("<ol");
+        if start != 1 {
+            let _ = write!(output, " start=\"{start}\"");
+        }
+        output.push_str(">\n");
+    } else {
+        output.push_str("<ul>\n");
+    }
+
+    for item in &list.items {
+        output.push_str("<li>");
+        let mut source = InlineSource::new();
+        for part in &item.parts {
+            let line = &block.lines[part.line];
+            source.push_line(&line.text[part.content_start..], &line.origin);
+        }
+        render_inline_source(output, &source, context, resolved, index, errors);
+        output.push_str("</li>\n");
+    }
+    output.push_str(if list.ordered_start.is_some() {
+        "</ol>\n"
+    } else {
+        "</ul>\n"
+    });
+}
+
+fn render_fenced_prose(
+    output: &mut String,
+    block: &Block,
+    fence: &FencedProse,
+    context: &RenderContext<'_>,
+) {
+    let language_name = fence.info.split_whitespace().next();
+    let language = language_name
+        .filter(|name| {
+            !matches!(
+                name.to_ascii_lowercase().as_str(),
+                "text" | "plain" | "plaintext"
+            )
+        })
+        .and_then(code_language);
+
+    output.push_str("<pre");
+    if let Some(language) = &language {
+        output.push_str(" class=\"language-");
+        push_escaped_attribute(output, &language.primary);
+        output.push('"');
+    }
+    output.push_str("><code");
+    if let Some(language) = &language {
+        output.push_str(" class=\"language-");
+        push_escaped_attribute(output, &language.primary);
+        if context.highlighting {
+            output
+                .push_str("\" data-litweb-highlight=\"pending\" data-litweb-language=\"");
+            push_escaped_attribute(output, &language.candidates);
+        }
+        output.push('"');
+    }
+    output.push('>');
+
+    for line in fence.content_start..fence.content_end {
+        let text = &block.lines[line].text;
+        let indentation = text
+            .bytes()
+            .take(fence.indentation)
+            .take_while(|byte| *byte == b' ')
+            .count();
+        push_escaped_text(output, &text[indentation..]);
+        output.push('\n');
+    }
+    output.push_str("</code></pre>\n");
+}
+---
+
+@s Rendering Semantic Tables
+
+The header row uses scoped heading cells, while ordinary rows use data cells.
+The same alignment class is applied down each column. The surrounding
+@code{table-scroll} element supplies horizontal overflow on a narrow screen
+without changing the table's semantic relationships.
+
+Each cell uses the ordinary inline renderer and the origin of its source row.
+References, code spans, equations, links, escaping, and diagnostics therefore
+behave just as they do in a paragraph.
+
+--- Render a prose table
+fn render_prose_table(
+    output: &mut String,
+    block: &Block,
+    table: &ProseTable,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    output.push_str("<div class=\"table-scroll\">\n<table>\n<thead>\n<tr>\n");
+    for (column, cell) in table.header.iter().enumerate() {
+        output.push_str("<th scope=\"col\" class=\"table-align-");
+        output.push_str(table_alignment_name(table.alignments[column]));
+        output.push_str("\">");
+        render_table_cell(output, block, cell, context, resolved, index, errors);
+        output.push_str("</th>\n");
+    }
+    output.push_str("</tr>\n</thead>\n");
+
+    if !table.body.is_empty() {
+        output.push_str("<tbody>\n");
+        for row in &table.body {
+            output.push_str("<tr>\n");
+            for (column, cell) in row.iter().enumerate() {
+                output.push_str("<td class=\"table-align-");
+                output.push_str(table_alignment_name(table.alignments[column]));
+                output.push_str("\">");
+                render_table_cell(output, block, cell, context, resolved, index, errors);
+                output.push_str("</td>\n");
+            }
+            output.push_str("</tr>\n");
+        }
+        output.push_str("</tbody>\n");
+    }
+    output.push_str("</table>\n</div>\n");
+}
+
+fn render_table_cell(
+    output: &mut String,
+    block: &Block,
+    cell: &TableCell,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    render_inline(
+        output,
+        &cell.text,
+        &block.lines[cell.line].origin,
+        context,
+        resolved,
+        index,
+        errors,
+    );
+}
+
+fn table_alignment_name(alignment: TableAlignment) -> &'static str {
+    match alignment {
+        TableAlignment::Left => "left",
+        TableAlignment::Center => "center",
+        TableAlignment::Right => "right",
+    }
+}
+---
+
+@s Equations in Prose
+
+Prose has already decided whether an equation is inline or displayed and has
+preserved its TeX body. Weaver keeps those two facts separate from HTML in a
+`MathFragment`. An inline fragment becomes a `span`; a displayed fragment
+becomes a `div`.
+
+The element initially contains escaped TeX source, so `$A = \pi r^2$` remains
+readable even without JavaScript. Presentation will show how an offline KaTeX
+adapter enhances that placeholder. The LaTeX backend instead uses the same
+preserved source directly.
+
+@s Receiving Inline Math
+
+`MathKind` says whether the preserved source belongs inside a sentence or on
+its own line. The shared inline representation supplies an inline equation's
+preserved source, while block-level Prose supplies displayed equations.
+
+--- Recognize inline prose math
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MathKind {
+    Inline,
+    Display,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MathFragment {
+    kind: MathKind,
+    source: String,
+}
+
+---
+
+@s Rendering an Equation Placeholder
+
+The placeholder contains escaped source text, not HTML from the equation.
+Without JavaScript that source remains visible. Stable outer classes let
+Presentation attach enhancement and print behavior without making this
+renderer interpret TeX.
+
+--- Render a math placeholder
+fn render_math_placeholder(output: &mut String, math: &MathFragment) {
+    match math.kind {
+        MathKind::Inline => {
+            output.push_str("<span class=\"litweb-math litweb-math-inline\">")
+        }
+        MathKind::Display => {
+            output.push_str("<div class=\"litweb-math litweb-math-display\">")
+        }
+    }
+    push_escaped_text(output, &math.source);
+    output.push_str(match math.kind {
+        MathKind::Inline => "</span>",
+        MathKind::Display => "</div>\n",
+    });
+}
+---
+
+@s Code in Prose
+
+Prose has already distinguished arbitrary backtick text from target-language
+`@code{...}`. Weaver maps the first to an ordinary `code` element and the
+second to `code class="source-code"`. For example, `@code{Graph}` produces
+`<code class="source-code">Graph</code>`.
+
+The target-code contents are opaque to Markdown and named-block recognition.
+They are also deliberately left unhighlighted: short colored spans could
+distract from a sentence or resemble links. The shared recognizer in
+`inline.rs` returns the decoded code and consumed byte count; Identifier and
+Weaver are separate consumers of that Prose-owned result.
+
+@s Safe HTML, Links, and URLs
+
+Source text never becomes raw HTML. The prose `<b>A & B</b>` is written as
+`&lt;b&gt;A &amp; B&lt;/b&gt;`, so the reader sees the original text rather
+than a bold element. The same rule protects code and generated labels.
+
+Text escaping handles ampersands and angle brackets. Attribute escaping also
+handles quotes so source cannot end an `href` or class. Only Weaver's own
+renderers create markup. Markdown links additionally reject control
+characters and the `javascript:`, `data:`, and `vbscript:` schemes after
+leading whitespace and case normalization.
+
+@s Escaping HTML Text and Attributes
+
+Text escapes ampersands and angle brackets. Attribute values additionally
+escape both quote characters before delegating ordinary characters to the
+same text rule.
+
+--- Escape HTML text and attributes
+
+fn push_escaped_text(output: &mut String, text: &str) {
+    for character in text.chars() {
+        push_escaped_char(output, character);
+    }
+}
+
+fn push_escaped_attribute(output: &mut String, text: &str) {
+    for character in text.chars() {
+        match character {
+            '"' => output.push_str("&quot;"),
+            '\'' => output.push_str("&#39;"),
+            character => push_escaped_char(output, character),
+        }
+    }
+}
+
+fn push_escaped_char(output: &mut String, character: char) {
+    match character {
+        '&' => output.push_str("&amp;"),
+        '<' => output.push_str("&lt;"),
+        '>' => output.push_str("&gt;"),
+        character => output.push(character),
+    }
+}
+---
+
+
+@s Inline Markdown and Code References
+
+Consider this short passage added to the `Greeting` program:
+
+```text
+Read **the [guide](guide.html)
+carefully**, compare *Sorting and
+Searching*, keep `@{Literal}` literal, name @code{Graph}, and follow
+@{Greeting line}.
+```
+
+The strong phrase and emphasized title each cross a soft line break, and the
+strong phrase contains a safe link. The backtick span visibly preserves
+`@{Literal}`; the target-code span becomes
+`<code class="source-code">Graph</code>`; and only the final named-block form
+links to section 2.
+
+The scan checks recognizable forms in this order: named-block references,
+backtick spans, target-language code, inline math, strong text, emphasized
+text, Markdown links, backslash escapes, and finally one literal UTF-8
+character. Only the strong and emphasis searches may continue across the
+soft newlines collected for one paragraph or list item. The other inline
+forms remain confined to their physical source line, and no search crosses a
+block boundary. An incomplete form remains literal; in particular, an
+unmatched `**` must not become an empty emphasis pair.
+
+A backtick encountered before its contents emits the entire code span without
+recursing, so `@{Name}` or `@code{example}` displays the syntax rather than
+activating it. A target-code span is also opaque: Markdown and named-block
+notation inside it remain target text. Strong and emphasized contents and link
+labels may recursively contain the supported forms. Unsafe or malformed link
+targets remain visible bracketed text instead of becoming active links.
+
+Prose now turns that located scope into backend-neutral inline elements.
+Recursive recognition has therefore already preserved the physical origin of
+a nested named-block reference before this HTML renderer sees it.
+
+--- Scan inline Markdown
+fn render_inline(
+    output: &mut String,
+    text: &str,
+    origin: &SourceOrigin,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    let mut source = InlineSource::new();
+    source.push_line(text, origin);
+    render_inline_source(output, &source, context, resolved, index, errors);
+}
+
+fn render_inline_source(
+    output: &mut String,
+    source: &InlineSource,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    render_inline_elements(
+        output,
+        &inline_elements(source),
+        context,
+        resolved,
+        index,
+        errors,
+    );
+}
+
+fn render_inline_elements(
+    output: &mut String,
+    elements: &[InlineElement],
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    for element in elements {
+        match element {
+            InlineElement::Text(text) => push_escaped_text(output, text),
+            InlineElement::Code(code) => {
+                output.push_str("<code>");
+                push_escaped_text(output, code);
+                output.push_str("</code>");
+            }
+            InlineElement::SourceCode { text: code, .. } => {
+                output.push_str("<code class=\"source-code\">");
+                push_escaped_text(output, code);
+                output.push_str("</code>");
+            }
+            InlineElement::Math(source) => render_math_placeholder(
+                output,
+                &MathFragment {
+                    kind: MathKind::Inline,
+                    source: source.clone(),
+                },
+            ),
+            InlineElement::Strong(contents) => {
+                output.push_str("<strong>");
+                render_inline_elements(
+                    output, contents, context, resolved, index, errors,
+                );
+                output.push_str("</strong>");
+            }
+            InlineElement::Emphasis(contents) => {
+                output.push_str("<em>");
+                render_inline_elements(
+                    output, contents, context, resolved, index, errors,
+                );
+                output.push_str("</em>");
+            }
+            InlineElement::Link {
+                label,
+                target,
+                active,
+            } => {
+                if *active {
+                    output.push_str("<a href=\"");
+                    push_escaped_attribute(output, target);
+                    output.push_str("\">");
+                    render_inline_elements(
+                        output, label, context, resolved, index, errors,
+                    );
+                    output.push_str("</a>");
+                } else {
+                    output.push('[');
+                    render_inline_elements(
+                        output, label, context, resolved, index, errors,
+                    );
+                    output.push_str("](");
+                    push_escaped_text(output, target);
+                    output.push(')');
+                }
+            }
+            InlineElement::BlockReference { name, origin } => {
+                render_code_reference(
+                    output, name, origin, context, resolved, index, errors,
+                );
+            }
+        }
+    }
+}
+---
+
+@s Rendering a Prose Code Reference
+
+The final `@{Greeting line}` in the example asks the relationship index for
+the visible definition, finds section 2, and renders the linked
+`⟨Greeting line 2⟩` notation inside a code-styled span.
+
+--- Render a prose code reference
+
+fn render_code_reference(
+    output: &mut String,
+    name: &str,
+    origin: &SourceOrigin,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    let location = definition_location(
+        name,
+        origin,
+        context.current_chapter,
+        resolved,
+        index,
+        errors,
+    );
+    output.push_str("<code class=\"section-reference\">");
+    render_section_name(output, name, location, false, context);
+    output.push_str("</code>");
+}
+---
+
+@s Rendering a Section Name
+
+Definition titles, prose references, and code uses share this one notation.
+Root names become bold, and a visible definition location adds the appropriate
+local or cross-page link.
+
+--- Render a section name
+
+fn render_section_name(
+    output: &mut String,
+    name: &str,
+    location: Option<&SectionLocation>,
+    root: bool,
+    context: &RenderContext<'_>,
+) {
+    output.push('⟨');
+    if root {
+        output.push_str("<strong>");
+    }
+    push_escaped_text(output, name);
+    if root {
+        output.push_str("</strong>");
+    }
+    if let Some(location) = location {
+        output.push(' ');
+        render_location_link(output, location, context);
+    }
+    output.push('⟩');
+}
+---
+
+@s Code Blocks and Their Notation
+
+The five `Greeting` sections now give every operator a concrete job. Section
+2 renders the base as `⟨Greeting line 2⟩ ≡`; sections 3 and 5 use `+≡`;
+section 4 uses `:=`; and the bold `hello.txt` name in section 1 marks a root.
+Its bare whole-line reference renders as linked, italic, non-code text so the
+source outline remains visible.
+
+Accessible labels state each operator in words. Ordinary target lines are
+escaped and retained one line at a time. Presentation later explains the
+optional language metadata used for syntax highlighting.
+
+--- Render a code block
+fn render_code_block(
+    output: &mut String,
+    block: &Block,
+    location: &SectionLocation,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    output.push_str("<div class=\"codeblock\">\n");
+    render_code_block_name(output, block, location, context, resolved, index, errors);
+    render_code_block_contents(output, block, location, context, resolved, index, errors);
+    output.push_str("</div>\n");
+}
+---
+
+@s Rendering a Code-Block Title
+
+The title resolves the occurrence's stable identity, finds the visible base
+definition, marks roots, and chooses the accessible operator for a base,
+addition, or replacement.
+
+--- Render a code-block title
+
+fn code_identity(
+    block: &Block,
+    location: &SectionLocation,
+    resolved: &ResolvedProgram,
+) -> Option<usize> {
+    let code = block.code().expect("the caller selected a code block");
+    match resolved.lookup(location.chapter, &code.name) {
+        BlockLookup::Found(identity) => Some(identity),
+        BlockLookup::Missing | BlockLookup::Ambiguous(_) => None,
+    }
+}
+
+fn render_code_block_name(
+    output: &mut String,
+    block: &Block,
+    location: &SectionLocation,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    let code = block.code().expect("the caller selected a code block");
+    let identity = code_identity(block, location, resolved);
+    let definition = definition_location(
+        &code.name,
+        &block.origin,
+        Some(location.chapter),
+        resolved,
+        index,
+        errors,
+    );
+    output.push_str("<div class=\"codeblock_name\"><span class=\"section-name\">");
+    render_section_name(
+        output,
+        &code.name,
+        definition,
+        identity.is_some_and(|identity| index.roots.contains(&identity)),
+        context,
+    );
+    output.push_str("</span> ");
+    let (operator, label) = if code.modifiers.contains(&Modifier::Additive) {
+        ("+≡", "is continued by")
+    } else if code.modifiers.contains(&Modifier::Redefinition) {
+        (":=", "is replaced by")
+    } else {
+        ("≡", "is defined as")
+    };
+    output.push_str("<span class=\"definition-operator\" aria-label=\"");
+    output.push_str(label);
+    output.push_str("\">");
+    output.push_str(operator);
+    output.push_str("</span></div>\n");
+}
+---
+
+@s Rendering Code-Block Contents
+
+The body escapes literal target lines and turns whole-line uses back into the
+shared section-name notation. For section 1, `@{Greeting line}` therefore
+becomes the linked reference instead of expanded output text. Relationship
+notes follow the code body for the resolved identity. The optional language
+class is explained later in Presentation.
+
+--- Render code-block contents
+
+fn render_code_block_contents(
+    output: &mut String,
+    block: &Block,
+    location: &SectionLocation,
+    context: &RenderContext<'_>,
+    resolved: &ResolvedProgram,
+    index: &WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) {
+    let code = block.code().expect("the caller selected a code block");
+    let identity = code_identity(block, location, resolved);
+    let language = code_language(&code.code_type);
+    output.push_str("<pre");
+    if let Some(language) = &language {
+        output.push_str(" class=\"language-");
+        push_escaped_attribute(output, &language.primary);
+        output.push('"');
+    }
+    output.push_str("><code");
+    if let Some(language) = &language {
+        output.push_str(" class=\"language-");
+        push_escaped_attribute(output, &language.primary);
+        if context.highlighting {
+            output
+                .push_str("\" data-litweb-highlight=\"pending\" data-litweb-language=\"");
+            push_escaped_attribute(output, &language.candidates);
+        }
+        output.push('"');
+    }
+    output.push('>');
+
+    for line in &block.lines {
+        if let Some(name) = block_reference(&line.text) {
+            output.push_str("<span class=\"nocode\">");
+            push_escaped_text(output, leading_whitespace(&line.text));
+            let definition = definition_location(
+                name,
+                &line.origin,
+                Some(location.chapter),
+                resolved,
+                index,
+                errors,
+            );
+            render_section_name(output, name, definition, false, context);
+            output.push_str("</span>\n");
+        } else {
+            push_escaped_text(output, &line.text);
+            output.push('\n');
+        }
+    }
+    output.push_str("</code></pre>\n");
+
+    if let Some(locations) = identity.and_then(|identity| index.blocks.get(&identity)) {
+        render_relationship(
+            output,
+            CodeRelationship::Addition,
+            &locations.additions,
+            location,
+            context,
+        );
+        render_relationship(
+            output,
+            CodeRelationship::Replacement,
+            &locations.redefinitions,
+            location,
+            context,
+        );
+        render_relationship(
+            output,
+            CodeRelationship::Use,
+            &locations.uses,
+            location,
+            context,
+        );
+    }
+}
+---
+
+@s Relationship Links
+
+Every `Greeting line` code title links back to the visible base in section 2.
+The base then receives the exact notes “See also sections 3 and 5,” “This code
+is replaced in section 4,” and “This code is used in section 1.”
+
+The general wording uses “section” for one location and “sections” for
+several, with `and` for two and an Oxford comma for three or more. A section
+is omitted from its own relationship note.
+
+The index has already deduplicated and ordered these locations. This renderer
+chooses only the local or cross-page `href` and finished sentence grammar. If a
+visible name is missing or ambiguous, it records an error and leaves safe
+unlinked notation in the discardable document.
+
+--- Find a visible definition location
+fn definition_location<'a>(
+    name: &str,
+    origin: &SourceOrigin,
+    requesting_chapter: Option<usize>,
+    resolved: &ResolvedProgram,
+    index: &'a WeaveIndex,
+    errors: &mut Vec<WeaveError>,
+) -> Option<&'a SectionLocation> {
+    let identity = match requesting_chapter {
+        Some(chapter) => resolved.lookup(chapter, name),
+        None => {
+            let candidates = resolved
+                .blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(identity, block)| (block.name == name).then_some(identity))
+                .collect::<Vec<_>>();
+            match candidates.as_slice() {
+                [] => BlockLookup::Missing,
+                [identity] => BlockLookup::Found(*identity),
+                _ => BlockLookup::Ambiguous(candidates),
+            }
+        }
+    };
+    let identity = match identity {
+        BlockLookup::Found(identity) => identity,
+        BlockLookup::Missing => {
+            errors.push(WeaveError {
+                origin: origin.clone(),
+                kind: WeaveErrorKind::UndefinedBlock {
+                    name: name.to_owned(),
+                },
+            });
+            return None;
+        }
+        BlockLookup::Ambiguous(candidates) => {
+            errors.push(WeaveError {
+                origin: origin.clone(),
+                kind: WeaveErrorKind::AmbiguousBlock {
+                    name: name.to_owned(),
+                    candidates: candidates
+                        .iter()
+                        .map(|identity| resolved.block(*identity).origin.clone())
+                        .collect(),
+                },
+            });
+            return None;
+        }
+    };
+
+    if let Some(locations) = index.blocks.get(&identity) {
+        if locations.definition_hidden {
+            return None;
+        }
+        if let Some(location) = &locations.definition {
+            return Some(location);
+        }
+    }
+    None
+}
+---
+
+@s Rendering One Section-Location Link
+
+On this page, section 2 has visible label `2` and target `#1:2`: the reader
+sees the presentation number, while the anchor also carries its chapter
+number. Book Weaving will extend the same operation with qualified labels and
+relative page URLs.
+
+--- Render one section-location link
+
+fn render_location_link(
+    output: &mut String,
+    location: &SectionLocation,
+    context: &RenderContext<'_>,
+) {
+    let label = location.label(context.current_chapter);
+    output.push_str("<a href=\"");
+    if context.single_page || context.current_chapter == Some(location.chapter) {
+        output.push('#');
+    } else {
+        let target = &context
+            .book_paths
+            .expect("cross-page links have HTML book paths")
+            .chapters[location.chapter];
+        push_escaped_attribute(output, &relative_url(context.current_path, target));
+        output.push('#');
+    }
+    push_escaped_attribute(output, &location.anchor());
+    output.push_str("\" aria-label=\"section ");
+    push_escaped_attribute(output, &label);
+    output.push_str("\">");
+    push_escaped_text(output, &label);
+    output.push_str("</a>");
+}
+---
+
+@s Code Relationship Wording
+
+The relationship kind supplies its singular or plural sentence opening. This
+keeps the meaning of additions, replacements, and uses separate from list
+punctuation and link construction.
+
+--- Code relationship wording
+
+#[derive(Clone, Copy)]
+enum CodeRelationship {
+    Addition,
+    Replacement,
+    Use,
+}
+
+impl CodeRelationship {
+    fn sentence_start(self, plural: bool) -> &'static str {
+        match (self, plural) {
+            (Self::Addition, false) => "See also section ",
+            (Self::Addition, true) => "See also sections ",
+            (Self::Replacement, false) => "This code is replaced in section ",
+            (Self::Replacement, true) => "This code is replaced in sections ",
+            (Self::Use, false) => "This code is used in section ",
+            (Self::Use, true) => "This code is used in sections ",
+        }
+    }
+}
+---
+
+@s Rendering Relationship Locations
+
+The current location is removed from its own note. Remaining locations use
+ordinary English punctuation—one link, two joined by “and,” or a longer list
+with an Oxford comma.
+
+--- Render relationship locations
+
+fn render_relationship(
+    output: &mut String,
+    relationship: CodeRelationship,
+    locations: &[SectionLocation],
+    current: &SectionLocation,
+    context: &RenderContext<'_>,
+) {
+    let locations = locations
+        .iter()
+        .filter(|location| *location != current)
+        .collect::<Vec<_>>();
+    if locations.is_empty() {
+        return;
+    }
+
+    output.push_str("<p class=\"seealso\">");
+    output.push_str(relationship.sentence_start(locations.len() > 1));
+    for (number, location) in locations.iter().enumerate() {
+        if number > 0 {
+            if number + 1 == locations.len() {
+                output.push_str(if locations.len() > 2 {
+                    ", and "
+                } else {
+                    " and "
+                });
+            } else {
+                output.push_str(", ");
+            }
+        }
+        render_location_link(output, location, context);
+    }
+    output.push_str(".</p>\n");
+}
+---
+
+@s The Page Ready for Extensions
+
+Weaver now has the complete single-page transformation. The authored
+`Greeting` occurrences arrived as five prepared reading sections, and the
+shared relationship index connected the `Greeting line` base, changes, and
+use. Weaver turned those facts into a safe linked HTML body. The `Notes`
+example showed that target-language identifiers use the same locations
+without becoming named-block relationships.
+
+For `greeting.lit`, the first planned output is the complete
+`greeting.html` page. An unusable input stem is rejected before a plan is
+returned. A visible missing or ambiguous named-block reference is recorded
+while the discardable string is rendered, and any such fatal error prevents
+the partial page from reaching Output.
+
+Book Weaving next distributes the same layout and indexes across related
+pages. Presentation then completes their shared shell and adds only the
+offline assets those finished pages request. Neither extension changes the
+shared `Greeting` relationships that this chapter rendered.

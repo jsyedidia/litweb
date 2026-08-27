@@ -1,0 +1,30 @@
+@code_type c .c
+@comment_type // %s
+
+@title Hello, world! in C
+
+@s Introduction
+
+This is an example "Hello, world!" C program.
+We can define codeblocks with `---`
+
+--- hello.c
+@{Includes}
+
+int main() {
+    @{Print a string}
+    return 0;
+}
+---
+
+Now we can define the @{Includes} codeblock:
+
+--- Includes
+#include <stdio.h>
+---
+
+Finally, our program needs to print "Hello, world!"
+
+--- Print a string
+printf("Hello, world!\n");
+---

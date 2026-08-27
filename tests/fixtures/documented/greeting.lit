@@ -1,0 +1,25 @@
+@title A Greeting
+@s Greeting
+This small program writes one line.
+
+--- hello.txt
+@{Greeting line}
+---
+
+The text comes from a separate named piece.
+
+--- Greeting line
+Hello
+---
+
+--- Greeting line +=
+from Litweb
+---
+
+--- Greeting line :=
+Good morning
+---
+
+--- Greeting line +=
+from Litweb
+---

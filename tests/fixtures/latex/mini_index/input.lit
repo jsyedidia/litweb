@@ -1,0 +1,178 @@
+@code_type rust .rs
+@comment_type // %s
+@title Mini-index pagination fixture
+
+@s Definitions
+
+The first section gives the later pages several meanings to refer back to.
+
+--- fixture.rs
+struct Alpha;
+struct Beta;
+struct Delta;
+struct Epsilon;
+struct Eta;
+struct Gamma;
+struct Iota;
+struct Kappa;
+struct Theta;
+struct ZBoundary;
+
+fn combine(value: Alpha) -> Alpha {
+    value
+}
+---
+
+@s One long presentation section
+
+This deliberately long section continues across physical page boundaries.
+The examples repeatedly use @code{Alpha}, @code{Beta}, and @code{Gamma} so a
+spread keeps only one entry for each meaning.
+
+The first explanation follows @code{Alpha} through a successful operation.
+The companion values @code{Beta} and @code{Gamma} remain available while the
+operation proceeds.
+
+Another paragraph uses @code{Delta}, @code{Epsilon}, and @code{Eta}. These
+names make the eventual three-column ordering easy to inspect.
+
+The same calculation can be described again with @code{Alpha}. Repetition on
+one spread must not duplicate its mini-index entry.
+
+The next step reads @code{Iota}, @code{Kappa}, and @code{Theta}. Each name was
+defined in the earlier code block rather than on this part of the document.
+
+Ordinary prose fills the page without introducing another mechanism. Its
+purpose is to let the presentation section cross a real page boundary.
+
+The explanation returns to @code{Alpha}, @code{Beta}, and @code{Gamma}. A
+reader on a later spread should be directed back to their definitions.
+
+More prose keeps the running example together. The values move through the
+same stages, but the document does not create new definitions for them.
+
+The later stage uses @code{Delta}, @code{Epsilon}, and @code{Eta} once more.
+Their entries should remain alphabetical rather than following this sentence.
+
+A physical page may end in the middle of this presentation section. Litweb
+must use page markers rather than assigning the whole section to every spread.
+
+The following paragraph again mentions @code{Iota}, @code{Kappa}, and
+@code{Theta}. It is intentionally separated from their declarations.
+
+Several sentences now provide ordinary reading material. They make room for
+the page composer to shorten a right page when its mini-index needs space.
+
+The calculation still depends on @code{Alpha}. Its use remains a use even
+though the name occurs in explanatory prose instead of a displayed block.
+
+The next paragraph names @code{Beta} and @code{Gamma}, then continues with a
+plain-language description of the same successful computation.
+
+Another stage reads @code{Delta} and @code{Epsilon}. The mini-index should
+link both entries to presentation section 1.
+
+The remaining value @code{Eta} joins @code{Iota}. These uses are far enough
+from the declarations to require help on a later spread.
+
+The example continues without a new heading because it is still explaining
+one operation. A presentation section is not assumed to fit on one page.
+
+Now @code{Kappa} and @code{Theta} return. Their source spellings contain no
+LaTeX commands, and the renderer assigns inert numeric marker identities.
+
+One more paragraph uses @code{Alpha}, @code{Beta}, and @code{Gamma}. The
+right-hand page must leave enough room below its body for the measured index.
+
+The following ordinary paragraph helps exercise a page break near an
+identifier marker. No authored text may be lost or duplicated by that break.
+
+The next operation uses @code{Delta}, @code{Epsilon}, and @code{Eta}. If this
+paragraph moves, its identifiers must move to the same later spread.
+
+The final explanatory group uses @code{Iota}, @code{Kappa}, and @code{Theta}.
+The page-local result should still be alphabetized in three columns.
+
+The prose finishes by calling @code{combine()} with an @code{Alpha}. The
+function and type are both defined in the earlier presentation section.
+
+--- Later code
+fn later(value: Alpha) -> Alpha {
+    combine(value)
+}
+---
+
+@s Material around a shortening boundary
+
+The second half of the fixture continues the same example. It uses
+@code{Alpha}, @code{Beta}, and @code{Gamma} after their definitions have moved
+onto an earlier spread.
+
+A reader can also meet @code{Delta}, @code{Epsilon}, and @code{Eta} here. The
+three names should occupy different alphabetical positions without changing
+the prose that surrounds them.
+
+The operation next combines @code{Iota}, @code{Kappa}, and @code{Theta}.
+Enough ordinary language follows to put a real page boundary near one of
+these marked uses.
+
+This paragraph describes a successful step without introducing an identifier.
+It gives the page builder material that may stay on this spread or move to the
+next one when the measured mini-index takes its space.
+
+The explanation calls @code{later()} and then returns to @code{Alpha}. Because
+@code{later()} was defined on this spread, its entry should be suppressed here
+even though the older type may still need an entry.
+
+Another ordinary paragraph keeps the example readable while exercising the
+same page-composition path. The authored sentences must remain in their
+original order after the right page is shortened.
+
+The next successful step reads @code{Beta}, @code{Gamma}, and @code{Delta}.
+Each name has already appeared, but one spread still receives at most one
+entry for each meaning.
+
+More explanation fills the physical page. Mini-index measurement may move
+this paragraph, but it must never duplicate it or leave it behind under the
+horizontal rule.
+
+Four more paragraphs put a unique use close to the space claimed by the
+mini-index. The first recalls why the body and the index must be measured as
+one page instead of laid on top of each other.
+
+The next paragraph contains no marked identifier. It can cross a page
+boundary freely, but its words must retain the same order before and after the
+composer returns displaced material to TeX.
+
+A third paragraph supplies another few lines of ordinary prose. A stable
+second LuaLaTeX run should choose exactly the same breaks as the first run
+after links and destinations have settled.
+
+The fourth paragraph brings the calculation close to the boundary without
+naming a program item. The following sentence is the one whose membership is
+easy to check in the finished PDF.
+
+One unmarked paragraph adds enough material for the measured index to make a
+real difference. Without the reserved rows it could remain on the right page;
+with them, TeX must carry later sentences forward in source order.
+
+A second paragraph continues that thought in ordinary language. It also makes
+the fixture insensitive to tiny font-metric variations while keeping the
+boundary check close enough to inspect by eye.
+
+The last unmarked paragraph states the invariant plainly: shortening may
+change a physical page membership, but it cannot change the authored program
+or explanation that the reader receives.
+
+Near the expected shortening boundary, the example mentions its boundary
+value without naming the Rust type yet. Its marked use comes at the very end,
+where the measured rows should carry it to the following spread.
+
+The final paragraphs continue with @code{Eta}, @code{Iota}, and @code{Kappa}.
+Their definitions are all in presentation section 1, so every printed entry
+can link to a precise and useful destination.
+
+One last operation mentions @code{Theta} and @code{combine()}. This ending is
+long enough to leave material after the first right-hand page has reserved
+space for its three balanced mini-index columns. The displaced final value has
+type @code{ZBoundary}.

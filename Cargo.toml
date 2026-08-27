@@ -1,0 +1,44 @@
+[package]
+name = "litweb"
+version = "0.8.1"
+edition = "2024"
+rust-version = "1.97"
+authors = ["Zachary Yedidia", "Jonathan Yedidia"]
+description = "A modern literate programming system"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/jsyedidia/litweb"
+include = [
+    "/.cargo/config.toml",
+    "/Cargo.lock",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/Makefile",
+    "/README.md",
+    "/assets/**",
+    "/docs/**",
+    "/examples/**",
+    "/lit/**",
+    "/rustfmt.toml",
+    "/src/**",
+    "/tests/**",
+    "/tools/compare_rust_code.py",
+    "/tools/test_compare_rust_code.py",
+    "/tools/bootstrap/README.md",
+    "/tools/bootstrap/src/**",
+]
+
+[dependencies]
+unicode-ident = "1"
+
+[lib]
+name = "litweb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lw"
+path = "src/main.rs"
+
+[[example]]
+name = "bootstrap"
+path = "tools/bootstrap/src/main.rs"

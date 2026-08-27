@@ -1,0 +1,21 @@
+@title Uses
+
+@s Shared and external names
+
+Both @code{shared_name} mentions belong to this chapter, as does
+@code{shared_name}.
+
+--- uses.rs
+use external::ExternalType;
+
+fn caller(argument: ExternalType) {
+    shared_name();
+    q;
+}
+
+fn LocalType() {}
+---
+
+--- Hidden --- noWeave
+fn hidden_name() {}
+---

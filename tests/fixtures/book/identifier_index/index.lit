@@ -1,0 +1,9 @@
+@book
+@title Indexed Rust Book
+@code_type rust .rs
+
+This small book exercises the master identifier index.
+
+[Definitions](chapters/definitions.lit)
+[Uses & More](nested/deep/uses.lit)
+[C Appendix](other.lit)

@@ -1,0 +1,101 @@
+\documentclass[12pt]{article}
+\input{litweb-latex/litweb.sty}
+\title{LaTeX \# \& \_ Demonstration}
+\author{}
+\date{}
+\LitwebDeclareMiniIndexMeaning{1}{\LitwebMiniIndexName{Graph}: struct, \hyperlink{litweb-1-2}{2}.}
+\LitwebDeclareMiniIndexMeaning{2}{\LitwebMiniIndexName{graph}: parameter, \hyperlink{litweb-1-3}{3}.}
+\LitwebDeclareMiniIndexMeaning{3}{\LitwebMiniIndexName{graph\_value}: function, \hyperlink{litweb-1-3}{3}.}
+\LitwebDeclareMiniIndexMeaning{4}{\LitwebMiniIndexName{main}: function, \hyperlink{litweb-1-1}{1}.}
+\LitwebDeclareMiniIndexMeaning{5}{\LitwebMiniIndexName{path}: local variable, \hyperlink{litweb-1-1}{1}.}
+\LitwebDeclareMiniIndexMeaning{6}{\LitwebMiniIndexName{squared\_distance}: function, \hyperlink{litweb-1-2}{2}.}
+\LitwebDeclareMiniIndexMeaning{7}{\LitwebMiniIndexName{value\_1}: field, \hyperlink{litweb-1-2}{2}.}
+\LitwebDeclareMiniIndexMeaning{8}{\LitwebMiniIndexName{x}: parameter, \hyperlink{litweb-1-2}{2}.}
+\LitwebDeclareMiniIndexMeaning{9}{\LitwebMiniIndexName{y}: parameter, \hyperlink{litweb-1-2}{2}.}
+\begin{document}
+\maketitle
+\LitwebMiniIndexBegin
+\LitwebSection{litweb-1-1}{1}\LitwebSectionTitle{Distance \& escaping.}
+\par This \textbf{small \href{\detokenize{https://example.com/a_b?x=1&y=2}}{guide}
+matters}, as does \emph{multiline
+emphasis}. Literal code preserves \texttt{\ \ @\{not\ active\}\ \ }, while
+\texttt{\LitwebMiniUse{7}value\_1\ \&\ value\_2} is Rust. The equation \(d^2 = x^2 + y^2\) remains TeX.
+The implementation is in \(\langle\)\texttt{Compute\_value\ \#1}\ \hyperlink{litweb-1-2}{2}\(\rangle\). An [unsafe](javascript:alert)
+target stays visible. Unicode prose includes café and an em dash — safely.
+
+\begin{itemize}
+\item A list item uses \texttt{\LitwebMiniUse{1}Graph}.
+\item A second item continues
+on another physical line.
+\end{itemize}
+\begin{enumerate}
+\setcounter{enumi}{2}
+\item Ordered values may begin elsewhere.
+\item Their numbering continues.
+\end{enumerate}
+\begin{LitwebCode}
+literal \LitwebBackslash{}command \LitwebLeftBrace{} braces \LitwebRightBrace{} % # $ & _ ^ ~
+This deliberately long fixed-width example line contains enough words and symbols to exceed an ordinary printed measure without disappearing beyond the right edge.
+\end{LitwebCode}
+\begin{center}
+\LitwebMiniBlockUse{1}\nobreak
+\begin{tabularx}{\linewidth}{LCR}
+\toprule
+Form & Meaning & Count \\
+\midrule
+\texttt{a\_b} & \emph{centered} & 2 \\
+\texttt{Graph} & \href{\detokenize{guide.html}}{safe} & \(n+1\) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\[
+\begin{aligned}
+d^2 &= x^2 + y^2 \\
+    &= 25
+\end{aligned}
+\]
+\LitwebCodeTitle{\(\langle\)\textbf{\texttt{demo.rs}}\ \hyperlink{litweb-1-1}{1}\(\rangle\) \(\equiv\)}
+\begin{LitwebMarkedCode}
+\LitwebCodeLine{}{\LitwebCodeDefinition{4}}fn main() \LitwebLeftBrace{}
+\LitwebCodeLine{}{}    \(\langle\)\texttt{Compute_value #1}\ \LitwebCodeLocation{1}{2}{2}\(\rangle\)
+\LitwebCodeLine{}{\LitwebCodeDefinition{5}}    let path = r"C:\LitwebBackslash{}very\LitwebBackslash{}long\LitwebBackslash{}path\LitwebBackslash{}whose\LitwebBackslash{}contents\LitwebBackslash{}make\LitwebBackslash{}this\LitwebBackslash{}source\LitwebBackslash{}line\LitwebBackslash{}wrap\LitwebBackslash{}without\LitwebBackslash{}becoming\LitwebBackslash{}active\LitwebBackslash{}LaTeX";
+\LitwebCodeLine{}{}    println!("\LitwebLeftBrace{}path\LitwebRightBrace{}");
+\LitwebCodeLine{}{}\LitwebRightBrace{}
+\end{LitwebMarkedCode}
+\LitwebSection{litweb-1-2}{2}
+\LitwebCodeTitle{\(\langle\)\texttt{Compute\_value\ \#1}\ \hyperlink{litweb-1-2}{2}\(\rangle\) \(\equiv\)}
+\begin{LitwebMarkedCode}
+\LitwebCodeLine{}{\LitwebCodeDefinition{1}}struct Graph \LitwebLeftBrace{}
+\LitwebCodeLine{}{\LitwebCodeDefinition{7}}    value_1: i32,
+\LitwebCodeLine{}{}\LitwebRightBrace{}
+\LitwebCodeLine{}{}
+\LitwebCodeLine{}{\LitwebCodeDefinition{6}\LitwebCodeDefinition{8}\LitwebCodeDefinition{9}}fn squared_distance(x: i32, y: i32) -> i32 \LitwebLeftBrace{}
+\LitwebCodeLine{\LitwebCodeUse{8}\LitwebCodeUse{8}\LitwebCodeUse{9}\LitwebCodeUse{9}}{}    x * x + y * y
+\LitwebCodeLine{}{}\LitwebRightBrace{}
+\end{LitwebMarkedCode}
+\LitwebSeeAlso{See also section \hyperlink{litweb-1-3}{3}.}
+\LitwebSeeAlso{This code is used in section \hyperlink{litweb-1-1}{1}.}
+\LitwebSection{litweb-1-3}{3}
+\LitwebCodeTitle{\(\langle\)\texttt{Compute\_value\ \#1}\ \hyperlink{litweb-1-2}{2}\(\rangle\) +\(\equiv\)}
+\begin{LitwebMarkedCode}
+\LitwebCodeLine{\LitwebCodeUse{1}}{\LitwebCodeDefinition{3}\LitwebCodeDefinition{2}}fn graph_value(graph: &Graph) -> i32 \LitwebLeftBrace{}
+\LitwebCodeLine{\LitwebCodeUse{2}\LitwebCodeUse{7}}{}    graph.value_1
+\LitwebCodeLine{}{}\LitwebRightBrace{}
+\end{LitwebMarkedCode}
+\LitwebSeeAlso{This code is used in section \hyperlink{litweb-1-1}{1}.}
+\LitwebMiniIndexEnd
+\section*{Identifier Index}
+\begin{description}
+\item[\texttt{Graph}] \hyperlink{litweb-1-1}{1}, \LitwebIdentifierDefinition{\hyperlink{litweb-1-2}{2}}, \hyperlink{litweb-1-3}{3}
+\item[\texttt{graph}] \LitwebIdentifierDefinition{\hyperlink{litweb-1-3}{3}}
+\item[\texttt{graph\_value}] \LitwebIdentifierDefinition{\hyperlink{litweb-1-3}{3}}
+\item[\texttt{main}] \LitwebIdentifierDefinition{\hyperlink{litweb-1-1}{1}}
+\item[\texttt{path}] \LitwebIdentifierDefinition{\hyperlink{litweb-1-1}{1}}
+\item[\texttt{println}] \hyperlink{litweb-1-1}{1}
+\item[\texttt{squared\_distance}] \LitwebIdentifierDefinition{\hyperlink{litweb-1-2}{2}}
+\item[\texttt{value\_1}] \hyperlink{litweb-1-1}{1}, \LitwebIdentifierDefinition{\hyperlink{litweb-1-2}{2}}, \hyperlink{litweb-1-3}{3}
+\item[\texttt{value\_2}] \hyperlink{litweb-1-1}{1}
+\item[\texttt{x}] \LitwebIdentifierDefinition{\hyperlink{litweb-1-2}{2}}
+\item[\texttt{y}] \LitwebIdentifierDefinition{\hyperlink{litweb-1-2}{2}}
+\end{description}
+\end{document}

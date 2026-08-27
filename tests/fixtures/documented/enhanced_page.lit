@@ -1,0 +1,13 @@
+@code_type rust .rs
+@comment_type // %s
+@title Distance
+
+@s Squared Distance
+The formula $d^2 = x^2 + y^2$ gives the squared distance.
+The implementation is in @{Squared distance}.
+
+--- Squared distance
+fn squared_distance(x: f64, y: f64) -> f64 {
+    x * x + y * y
+}
+---

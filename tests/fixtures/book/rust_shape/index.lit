@@ -1,0 +1,12 @@
+@book
+@title Small Rust Book
+@code_type rust .rs
+@comment_type # %s
+
+This introduction includes [the guide](guide.html), while an embedded
+[chapter-looking link](chapters/library.lit) remains ordinary prose.
+
+[Library](chapters/library.lit)
+    [Helpers](chapters/helpers.lit)
+[Application](chapters/application.lit)
+@comment_type // %s

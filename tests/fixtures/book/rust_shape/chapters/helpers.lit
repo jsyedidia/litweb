@@ -1,0 +1,29 @@
+@s Helper outputs
+
+This chapter uses the shared @{Shared prelude} but has its own
+@{Local variables} block.
+
+--- src/bin/demo.rs
+@{Shared prelude}
+@{Local variables}
+fn main() { println!("{}", LOCAL); }
+---
+
+--- examples/demo.rs
+@{Local variables}
+fn main() { println!("{}", LOCAL); }
+---
+
+--- tests/generated.rs
+@{Local variables}
+#[test]
+fn generated() { assert_eq!(LOCAL, "helpers"); }
+---
+
+--- Local variables
+const LOCAL: &str = "helpers";
+---
+
+--- Shared prelude +=
+use std::path::Path;
+---

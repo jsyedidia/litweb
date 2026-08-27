@@ -1,0 +1,25 @@
+@title Definitions
+
+@s Local declarations
+
+The prose mentions @code{shared_name} in the same presentation section that
+defines it.
+
+--- definitions.rs
+pub struct LocalType {
+    field: usize,
+}
+
+pub fn shared_name(value: LocalType) -> LocalType {
+    value
+}
+---
+
+@s Later uses
+
+--- More uses
+fn later() {
+    let q = shared_name(LocalType { field: 0 });
+    q;
+}
+---

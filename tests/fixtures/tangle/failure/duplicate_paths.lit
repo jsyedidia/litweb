@@ -1,0 +1,7 @@
+@s Duplicate paths
+--- nested//same.txt
+first
+---
+--- nested/same.txt
+second
+---

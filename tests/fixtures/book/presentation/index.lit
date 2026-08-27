@@ -1,0 +1,7 @@
+@book
+@title Presentation Book
+@code_type rust .rs
+
+[First](chapters/first.lit)
+[Middle](chapters/middle.lit)
+[Last](chapters/last.lit)

@@ -1,0 +1,14 @@
+@title Third Major Chapter
+
+@s A self-contained ending
+
+This final chapter defines and uses its one name on the same spread, so its
+mini-index is empty.
+
+--- src/third.rs
+pub struct FinalDefinition;
+
+pub fn finish(value: FinalDefinition) -> FinalDefinition {
+    value
+}
+---

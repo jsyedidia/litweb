@@ -1,0 +1,10 @@
+@title Minimal Tangle
+@comment_type // %s
+
+@s One output
+
+This fixture produces one tangled file.
+
+--- minimal.txt
+one line
+---

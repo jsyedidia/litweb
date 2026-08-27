@@ -1,0 +1,12 @@
+@book
+@title Mini-index Book Fixture
+@code_type rust .rs
+@comment_type // %s
+
+The introduction is front matter. It mentions `FutureDefinition` literally,
+without creating a page marker.
+
+[First](chapters/first.lit)
+    [First companion](chapters/first_companion.lit)
+[Second](chapters/second.lit)
+[Third](chapters/third.lit)

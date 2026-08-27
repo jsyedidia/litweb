@@ -1,0 +1,10 @@
+@s Longer cycle
+--- output.txt
+@{First}
+---
+--- First
+@{Second}
+---
+--- Second
+@{First}
+---

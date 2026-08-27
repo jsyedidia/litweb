@@ -1,0 +1,2 @@
+// minimal.txt
+one line

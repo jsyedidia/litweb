@@ -1,0 +1,8 @@
+@title No Header
+@comment_type // %s
+
+@s Clean output
+
+--- clean.rs --- noHeader noWeave
+fn clean() {}
+---

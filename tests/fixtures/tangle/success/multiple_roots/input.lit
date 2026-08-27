@@ -1,0 +1,18 @@
+@title Multiple Roots
+
+@s Root files
+
+This fixture produces two ordinary root files and one quoted extensionless root.
+
+--- alpha.txt
+alpha
+---
+
+--- nested/beta.txt
+beta
+---
+
+--- "Makefile"
+all:
+	echo oracle
+---

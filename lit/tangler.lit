@@ -1,0 +1,887 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Tangler
+
+@s From Resolved Definitions to a Planned File
+
+Resolver ended with two final definitions and one **root**: a definition whose
+name is also the path of a complete output file.
+
+```text
+ResolvedProgram
+|-- blocks[0] "hello.txt"
+|   `-- "@{Greeting line}"        source line 6
+|-- blocks[1] "Greeting line"
+|   |-- "Good morning"            source line 20
+|   `-- "from Litweb"             source line 24
+`-- roots[0] -> blocks[0] -> "hello.txt"
+```
+
+The root's only line is a **whole-line reference**: after surrounding
+whitespace is removed, the entire line has the form `@{Name}`. Tangler
+**expands** that line by replacing it with the final lines of the selected
+definition. The proposed `hello.txt` is therefore:
+
+```text
+Good morning
+from Litweb
+```
+
+Each emitted text line receives one LF (`\n`), including the final line. The
+complete in-memory result is:
+
+```text
+TanglePlan
+|-- outputs[0]
+|   |-- relative path "hello.txt"
+|   |-- bytes "Good morning\nfrom Litweb\n"
+|   `-- origin greeting.lit:5
+`-- warnings []
+```
+
+A **planned output** contains a relative path, complete bytes, and the source
+location that requested the file. It is still only a proposal: Tangler has
+not opened `hello.txt` or changed the filesystem.
+
+The public @code{plan_tangle} function accepts Parser's @code{Program} and
+invokes Resolver. Once resolution succeeds, the expansion algorithm works
+from the resulting @code{ResolvedProgram}. It follows final definitions and
+roots; it does not collect bases, apply changes, or discover roots again.
+
+@s Following the First Reference
+
+The small example gives the general expansion rule in concrete form:
+
+1. Start at `blocks[0]`, the `hello.txt` root.
+2. Read its line `@{Greeting line}`.
+3. Recognize the whole-line reference and look up `Greeting line`, obtaining
+   `blocks[1]`.
+4. Enter `blocks[1]`.
+5. Emit `Good morning` and an LF, then `from Litweb` and an LF.
+6. Finish `blocks[1]`, finish the root, and store the bytes in the plan.
+
+Conceptually, step 4 is a recursive call: pause the root, expand its child,
+then resume the root. A **frame** records one such paused expansion—its
+definition, next line, and inherited indentation. While the example runs, the
+frame stack and output grow as follows:
+
+```text
+frames: [hello.txt at line 0]
+output: ""
+
+frames: [hello.txt at end, Greeting line at line 0]
+output: ""
+
+frames: [hello.txt at end, Greeting line at line 1]
+output: "Good morning\n"
+
+frames: [hello.txt at end, Greeting line at end]
+output: "Good morning\nfrom Litweb\n"
+
+frames: []
+output: "Good morning\nfrom Litweb\n"
+```
+
+The nested frames form the **active chain**. If an active definition is
+referenced again, expansion would never finish; that reference is a cycle. A
+definition that has already finished is no longer active and may be reused
+later.
+
+@s The Whole-Line Reference Contract
+
+Surrounding whitespace does not prevent expansion, so both
+`@{Greeting line}` and `    @{Greeting line}` are references. Text on either
+side does prevent it: `prefix @{Greeting line}` and
+`@{Greeting line} suffix` are copied literally.
+
+Leading whitespace on a genuine reference becomes **accumulated indentation**.
+If a line containing four spaces and `@{Body}` selects a body
+containing `println!("hello");`, the emitted line begins with those four
+spaces. A reference inside `Body` adds its own leading whitespace to the
+amount already inherited.
+
+That accumulated indentation belongs before nonempty child lines. A truly
+empty line has no target text to indent, so it emits only its line ending. A
+line containing authored spaces or tabs is different: it is nonempty target
+text, and Tangler preserves both its inherited indentation and its authored
+whitespace.
+
+Tangler and Weaver share this exact recognition rule. Otherwise the woven page
+could link a line as a block use while the tangled file treated the same line
+as literal text. The helpers are small:
+
+--- src/util.rs
+//! Small utilities shared by Litweb's core modules.
+
+@{Reference and whitespace helpers}
+---
+
+--- Reference and whitespace helpers
+pub(crate) fn block_reference(text: &str) -> Option<&str> {
+    let stripped = text.trim();
+    (stripped.starts_with("@{") && stripped.ends_with('}') && stripped.len() >= 3)
+        .then(|| &stripped[2..stripped.len() - 1])
+}
+
+pub(crate) fn leading_whitespace(text: &str) -> &str {
+    let end = text
+        .char_indices()
+        .find_map(|(index, character)| (!character.is_whitespace()).then_some(index))
+        .unwrap_or(text.len());
+    &text[..end]
+}
+---
+
+@s The Tangler Module and Its Result
+
+The Tangler module owns expansion, framing choices, warnings, and structured
+failures. It reuses @code{PlannedOutput} from the neutral Output module, which
+also receives woven files.
+
+--- src/tangler.rs
+//! Clean source generation from parsed `.lit` programs.
+
+@{Tangler imports}
+@{Tangle warnings}
+@{Tangle options}
+@{Tangle plan}
+@{Tangle plan failures}
+@{Expansion error model}
+@{Render one expansion error}
+@{Expansion error collection}
+@{Plan tangle function}
+@{Expansion frames}
+@{First nonblank indentation}
+@{Block-separator helper}
+@{Expand one root}
+@{Write tangled outputs function}
+---
+
+The dependencies express those boundaries: Resolver supplies definitions and
+lookup results, Parser supplies the public input and source locations, the
+shared utility recognizes references, and Output owns planned files and
+filesystem replacement.
+
+--- Tangler imports
+use std::fmt;
+use std::path::Path;
+
+pub use crate::output::{
+    OutputAction, OutputError, OutputErrorKind, PlannedOutput, write_planned_outputs,
+    write_planned_outputs_protecting,
+};
+use crate::parser::{Program, SourceOrigin};
+use crate::resolver::{BlockLookup, ResolveErrors, ResolvedProgram, resolve};
+use crate::util::{block_reference, leading_whitespace};
+---
+
+@code{TanglePlan} groups the ordered file proposals with any nonfatal
+warnings. A fatal resolution or expansion failure returns no plan.
+
+--- Tangle plan
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TanglePlan {
+    pub outputs: Vec<PlannedOutput>,
+    pub warnings: Vec<TangleWarning>,
+}
+---
+
+@s Recursive Meaning and an Explicit Stack
+
+For any one root, expansion means:
+
+1. enter the definition and emit its optional generated header;
+2. visit its final lines in order;
+3. when two references are adjacent, add a separator if the first child did
+   not already end with a blank line;
+4. expand a selected whole-line reference at its inherited indentation; and
+5. otherwise copy a nonempty ordinary line with its indentation and one LF,
+   or emit only the LF for an empty line.
+
+A direct recursive Rust function would make a process-stack call for every
+nested reference. Valid input can be much deeper than the process stack
+allows, so Tangler stores the frames in a @code{Vec} on the heap instead.
+@code{next_line} marks where a paused definition will resume.
+@code{indentation} is the whitespace inherited through its reference chain.
+@code{entered} prevents a header from being repeated, and
+@code{previous_reference_start} supports the separator rule.
+
+--- Expansion frames
+struct ExpansionFrame {
+    block: usize,
+    next_line: usize,
+    indentation: String,
+    entered: bool,
+    previous_reference_start: Option<usize>,
+}
+---
+
+The outer operation owns the growing output, ordered errors, active chain, and
+frame stack. Each pass through the loop enters the top frame if necessary,
+finishes it if no lines remain, or processes exactly one next line.
+
+--- Expand one root
+fn expand_root(
+    resolved: &ResolvedProgram,
+    root: usize,
+    options: &TangleOptions,
+) -> (String, Vec<ExpansionError>) {
+    @{Initialize root expansion}
+
+    while !frames.is_empty() {
+        @{Enter an expansion frame}
+        @{Finish an expansion frame}
+        @{Process the next expansion line}
+    }
+
+    (output, errors)
+}
+---
+
+@s Starting a Root
+
+One root begins with no bytes or errors. @code{active} lists the definition
+identities on the current chain. The parallel @code{active_positions} vector
+answers “is this definition active, and where did it enter the chain?” without
+searching the whole chain. The one initial frame selects the root and inherits
+no indentation.
+
+--- Initialize root expansion
+let mut output = String::new();
+let mut errors = Vec::new();
+let mut active = Vec::new();
+let mut active_positions = vec![None; resolved.blocks.len()];
+let mut first_indentations = vec![FirstIndentation::Unknown; resolved.blocks.len()];
+let mut frames = vec![ExpansionFrame {
+    block: root,
+    next_line: 0,
+    indentation: String::new(),
+    entered: false,
+    previous_reference_start: None,
+}];
+---
+
+@s Entering and Finishing a Frame
+
+On first entry, Tangler emits the definition's header when the selected
+options and definition permit one. It then records the definition on the
+active chain.
+
+--- Enter an expansion frame
+let depth = frames.len() - 1;
+let block_index = frames[depth].block;
+let block = resolved.block(block_index);
+
+if !frames[depth].entered {
+    if options.headers && !block.comment_string.is_empty() && !block.no_header {
+        output.push_str(&frames[depth].indentation);
+        if let Some(indentation) = first_nonblank_indentation(
+            resolved,
+            block_index,
+            &mut first_indentations,
+        ) {
+            output.push_str(&indentation);
+        }
+        output.push_str(&block.comment_string.replace("%s", &block.name));
+        output.push('\n');
+    }
+    frames[depth].entered = true;
+    active_positions[block_index] = Some(active.len());
+    active.push(block_index);
+}
+---
+
+After its final line, the definition leaves both the frame stack and active
+chain. It can then be used by another branch without being mistaken for a
+cycle.
+
+--- Finish an expansion frame
+if frames[depth].next_line == block.lines.len() {
+    frames.pop();
+    let exited = active.pop().expect("entered frame has an active block");
+    active_positions[exited] = None;
+    continue;
+}
+---
+
+@s Processing the Next Line
+
+The next final line still carries the chapter in which it was authored.
+Tangler first advances the current frame, then either expands a recognized
+reference or emits literal text.
+
+For a reference, the operation applies a sibling separator when needed and
+asks Resolver's lookup index for the target. A missing or ambiguous name is
+recorded at the use line. A target already on the active chain produces the
+closed cycle. Every other target receives a new child frame whose indentation
+combines the parent's inherited whitespace with the reference line's own
+leading whitespace. The ordinary-line branch instead copies the text and adds
+one LF. It omits inherited indentation when that text is empty, preventing a
+structurally blank line from acquiring trailing spaces.
+
+--- Process the next expansion line
+let line_index = frames[depth].next_line;
+let line = block.lines[line_index].clone();
+let line_chapter = block.line_chapters[line_index];
+frames[depth].next_line += 1;
+let indentation = frames[depth].indentation.clone();
+if let Some(name) = block_reference(&line.text) {
+    if options.block_separators
+        && frames[depth]
+            .previous_reference_start
+            .is_some_and(|start| !ends_with_blank_line(&output[start..]))
+    {
+        output.push('\n');
+    }
+    frames[depth].previous_reference_start = Some(output.len());
+    let name = name.to_owned();
+    let target = match resolved.lookup(line_chapter, &name) {
+        BlockLookup::Found(target) => target,
+        BlockLookup::Missing => {
+            errors.push(ExpansionError {
+                origin: line.origin,
+                kind: ExpansionErrorKind::UndefinedBlock { name },
+            });
+            continue;
+        }
+        BlockLookup::Ambiguous(indices) => {
+            errors.push(ExpansionError {
+                origin: line.origin,
+                kind: ExpansionErrorKind::AmbiguousBlock {
+                    name,
+                    candidates: indices
+                        .iter()
+                        .map(|index| resolved.block(*index).origin.clone())
+                        .collect(),
+                },
+            });
+            continue;
+        }
+    };
+
+    if let Some(position) = active_positions[target] {
+        let mut cycle = active[position..].to_vec();
+        cycle.push(target);
+        let first_chapter = resolved.block(cycle[0]).chapter;
+        let crosses_chapters = cycle
+            .iter()
+            .any(|index| resolved.block(*index).chapter != first_chapter);
+        let kind = if crosses_chapters {
+            ExpansionErrorKind::CrossChapterReferenceCycle {
+                blocks: cycle
+                    .iter()
+                    .map(|index| CycleBlock {
+                        name: resolved.block(*index).name.clone(),
+                        origin: resolved.block(*index).origin.clone(),
+                    })
+                    .collect(),
+            }
+        } else {
+            ExpansionErrorKind::ReferenceCycle {
+                names: cycle
+                    .iter()
+                    .map(|index| resolved.block(*index).name.clone())
+                    .collect(),
+            }
+        };
+        errors.push(ExpansionError {
+            origin: line.origin,
+            kind,
+        });
+        continue;
+    }
+
+    frames.push(ExpansionFrame {
+        block: target,
+        next_line: 0,
+        indentation: indentation + leading_whitespace(&line.text),
+        entered: false,
+        previous_reference_start: None,
+    });
+} else {
+    frames[depth].previous_reference_start = None;
+    if !line.text.is_empty() {
+        output.push_str(&indentation);
+    }
+    output.push_str(&line.text);
+    output.push('\n');
+}
+---
+
+@s Generated Headers and Separators
+
+Tangler can add **generated framing** that was not authored as target code:
+block-name comments help a reader navigate the tangled file, and one blank
+separator can distinguish adjacent child definitions. This exact program makes
+both additions visible:
+
+```text
+@comment_type // %s
+@s Program
+--- output.rs
+fn main() {
+    @{Body}
+    @{Ending}
+}
+---
+--- Body
+println!("hello");
+---
+--- Ending
+return;
+---
+```
+
+With ordinary options, Tangler proposes:
+
+```rust
+// output.rs
+fn main() {
+    // Body
+    println!("hello");
+
+    // Ending
+    return;
+}
+```
+
+The root and both children receive headers from `// %s`. Child headers and
+lines inherit the four spaces before each reference. Because `Body` and
+`Ending` are adjacent references and `Body` did not end with a blank authored
+line, Tangler inserts one separator.
+
+With both kinds of framing disabled, the same program produces:
+
+```rust
+fn main() {
+    println!("hello");
+    return;
+}
+```
+
+@code{TangleOptions} chooses the two additions independently. Both are enabled
+by default.
+
+--- Tangle options
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TangleOptions {
+    pub headers: bool,
+    pub block_separators: bool,
+}
+
+impl Default for TangleOptions {
+    fn default() -> Self {
+        Self {
+            headers: true,
+            block_separators: true,
+        }
+    }
+}
+---
+
+An empty comment pattern or a definition marked `noHeader` supplies no header.
+An authored blank line at a child boundary already supplies separation.
+Literal parent code ends adjacency, and Tangler adds no separator before the
+first child or after the root. Disabling framing removes only generated
+material; authored target text remains under Tangler's LF policy. Input CRLF
+line endings are not preserved byte for byte.
+
+The separator test needs only the bytes produced since the preceding child
+began. This helper reports whether those bytes end in an empty or
+whitespace-only line.
+
+--- Block-separator helper
+fn ends_with_blank_line(output: &str) -> bool {
+    let Some(without_ending) = output.strip_suffix('\n') else {
+        return false;
+    };
+    without_ending
+        .rsplit('\n')
+        .next()
+        .is_some_and(|line| line.chars().all(char::is_whitespace))
+}
+---
+
+@s Aligning a Header with Its First Visible Line
+
+A block may begin with blank lines or with another reference. Its header is
+written before either has been expanded, but it should align with the first
+nonblank authored line that will eventually appear. For example, if an
+indented reference selects `Wrapper`, and `Wrapper` begins with a further
+two-space reference to `Leaf`, the `Wrapper` header needs both amounts of
+indentation:
+
+```text
+    @{Wrapper}
+
+--- Wrapper
+  @{Leaf}
+---
+
+--- Leaf
+text
+---
+```
+
+The first visible line from `Wrapper` is `Leaf`'s `text`, six spaces from the
+outer margin. Its generated header therefore also begins six spaces from the
+margin.
+
+@code{FirstIndentation} caches the first answer found for each definition so
+repeated uses need not scan the same nested lines again. @code{Unknown} means
+the definition has not been inspected, @code{Visiting} means it is on the
+lookahead stack, and @code{Known} stores either its first relative indentation
+or the fact that it emits no nonblank line.
+
+The lookahead has its own explicit stack. It skips blank lines, follows
+whole-line references, and combines their leading whitespace. Missing and
+cyclic paths are treated as empty during lookahead because ordinary expansion
+will report the real error at the use line and discard the failed plan.
+
+--- First nonblank indentation
+#[derive(Clone)]
+enum FirstIndentation {
+    Unknown,
+    Visiting,
+    Known(Option<String>),
+}
+
+struct FirstIndentationFrame {
+    block: usize,
+    next_line: usize,
+}
+
+fn first_nonblank_indentation(
+    resolved: &ResolvedProgram,
+    root: usize,
+    states: &mut [FirstIndentation],
+) -> Option<String> {
+    if let FirstIndentation::Known(indentation) = &states[root] {
+        return indentation.clone();
+    }
+
+    states[root] = FirstIndentation::Visiting;
+    let mut frames = vec![FirstIndentationFrame {
+        block: root,
+        next_line: 0,
+    }];
+
+    while !frames.is_empty() {
+        let depth = frames.len() - 1;
+        let block_index = frames[depth].block;
+        let block = resolved.block(block_index);
+        if frames[depth].next_line == block.lines.len() {
+            states[block_index] = FirstIndentation::Known(None);
+            frames.pop();
+            continue;
+        }
+
+        let line_index = frames[depth].next_line;
+        let line = &block.lines[line_index];
+        if let Some(name) = block_reference(&line.text) {
+            let line_chapter = block.line_chapters[line_index];
+            let BlockLookup::Found(target) = resolved.lookup(line_chapter, name) else {
+                frames[depth].next_line += 1;
+                continue;
+            };
+            match states[target].clone() {
+                FirstIndentation::Unknown => {
+                    states[target] = FirstIndentation::Visiting;
+                    frames.push(FirstIndentationFrame {
+                        block: target,
+                        next_line: 0,
+                    });
+                }
+                FirstIndentation::Visiting | FirstIndentation::Known(None) => {
+                    frames[depth].next_line += 1;
+                }
+                FirstIndentation::Known(Some(child_indentation)) => {
+                    let mut indentation = leading_whitespace(&line.text).to_owned();
+                    indentation.push_str(&child_indentation);
+                    states[block_index] = FirstIndentation::Known(Some(indentation));
+                    frames.pop();
+                }
+            }
+        } else if line.text.trim().is_empty() {
+            frames[depth].next_line += 1;
+        } else {
+            states[block_index] =
+                FirstIndentation::Known(Some(leading_whitespace(&line.text).to_owned()));
+            frames.pop();
+        }
+    }
+
+    let FirstIndentation::Known(indentation) = &states[root] else {
+        unreachable!("completed lookahead has a known result");
+    };
+    indentation.clone()
+}
+---
+
+@s Planning Every Root
+
+@code{plan_tangle} selects ordinary framing.
+@code{plan_tangle_with_options} first resolves the public @code{Program}, then
+expands each resolved root in source order. In the `Greeting` example that
+single loop iteration creates the path, bytes, and origin shown at the
+chapter's beginning.
+
+With several roots, output order remains root order. Tangler continues after
+one root fails so independent roots produce a stable, complete error list.
+If any expansion error exists, it discards every accumulated output and
+returns no @code{TanglePlan}. This is an all-or-nothing in-memory plan, not a
+filesystem transaction.
+
+--- Plan tangle function
+pub fn plan_tangle(program: &Program) -> Result<TanglePlan, PlanError> {
+    plan_tangle_with_options(program, TangleOptions::default())
+}
+
+pub fn plan_tangle_with_options(
+    program: &Program,
+    options: TangleOptions,
+) -> Result<TanglePlan, PlanError> {
+    let resolved = resolve(program).map_err(PlanError::Resolution)?;
+    let mut outputs = Vec::with_capacity(resolved.roots.len());
+    let mut errors = Vec::new();
+
+    for root in &resolved.roots {
+        let (bytes, mut root_errors) = expand_root(&resolved, root.block, &options);
+        errors.append(&mut root_errors);
+        outputs.push(PlannedOutput {
+            relative_path: root.path.clone(),
+            bytes: bytes.into_bytes(),
+            origin: root.origin.clone(),
+        });
+    }
+
+    if !errors.is_empty() {
+        return Err(PlanError::Expansion(ExpansionErrors { errors }));
+    }
+
+    let warnings = if resolved.roots.is_empty() {
+        vec![TangleWarning {
+            origin: program.origin.clone(),
+            kind: TangleWarningKind::NoRoots,
+        }]
+    } else {
+        Vec::new()
+    };
+    Ok(TanglePlan { outputs, warnings })
+}
+---
+
+Some documents exist only to weave an explanation and contain no file-shaped
+root. That is valid: planning returns an empty output vector and a
+@code{NoRoots} warning instead of failing.
+
+--- Tangle warnings
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TangleWarning {
+    pub origin: SourceOrigin,
+    pub kind: TangleWarningKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TangleWarningKind {
+    NoRoots,
+}
+
+impl fmt::Display for TangleWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            TangleWarningKind::NoRoots => write!(
+                f,
+                "{}: warning: no file code blocks; no code written",
+                self.origin
+            ),
+        }
+    }
+}
+---
+
+@s References Authored in Book Chapters
+
+Resolver's English/Spanish example produced this final root:
+
+```text
+ResolvedBlock "hello.txt"          base chapter: English
+|-- "Hello"                        line chapter: English
+`-- "@{Punctuation}"               line chapter: Spanish
+```
+
+English and Spanish each define `Punctuation`, but Spanish authored the added
+reference. Tangler passes that line's chapter to Resolver's local-first lookup,
+so the reference selects Spanish's definition. The authored output is:
+
+```text
+Hello
+¡
+```
+
+The base chapter identifies the root definition; the chapter stored beside
+each final line identifies where that line's references should look first.
+Cycle detection still uses stable definition identities, so equal local names
+in different chapters are not confused.
+
+@s Planning Failures
+
+Planning can fail at two different stages. A resolution failure means the
+bases, changes, roots, or paths were invalid before expansion. An expansion
+failure means a reachable root contained a missing, ambiguous, or cyclic
+reference. The public error keeps that distinction.
+
+--- Tangle plan failures
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanError {
+    Resolution(ResolveErrors),
+    Expansion(ExpansionErrors),
+}
+
+impl fmt::Display for PlanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resolution(errors) => write!(f, "{errors}"),
+            Self::Expansion(errors) => write!(f, "{errors}"),
+        }
+    }
+}
+
+impl std::error::Error for PlanError {}
+---
+
+Every expansion error retains the origin of the use line. Missing names,
+ambiguous names, same-chapter cycles, and cross-chapter cycles carry the
+details a caller needs to inspect or display the problem.
+
+--- Expansion error model
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpansionError {
+    pub origin: SourceOrigin,
+    pub kind: ExpansionErrorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpansionErrorKind {
+    UndefinedBlock {
+        name: String,
+    },
+    AmbiguousBlock {
+        name: String,
+        candidates: Vec<SourceOrigin>,
+    },
+    ReferenceCycle {
+        names: Vec<String>,
+    },
+    CrossChapterReferenceCycle {
+        blocks: Vec<CycleBlock>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleBlock {
+    pub name: String,
+    pub origin: SourceOrigin,
+}
+---
+
+The display boundary turns one structured error into a source-located
+sentence. Cross-chapter cycles include the origins of their definitions so
+repeated local names remain distinguishable.
+
+--- Render one expansion error
+impl fmt::Display for ExpansionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: error: ", self.origin)?;
+        match &self.kind {
+            ExpansionErrorKind::UndefinedBlock { name } => {
+                write!(f, "code block {{{name}}} is not defined")
+            }
+            ExpansionErrorKind::AmbiguousBlock { name, candidates } => {
+                write!(
+                    f,
+                    "code block {{{name}}} is ambiguous; definitions are at {}",
+                    candidates
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            ExpansionErrorKind::ReferenceCycle { names } => {
+                write!(f, "code block reference cycle: {}", names.join(" -> "))
+            }
+            ExpansionErrorKind::CrossChapterReferenceCycle { blocks } => write!(
+                f,
+                "code block reference cycle: {}",
+                blocks
+                    .iter()
+                    .map(|block| format!("{} at {}", block.name, block.origin))
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ExpansionError {}
+---
+
+The aggregate preserves root-order discovery for library callers. Its short
+display reports the first problem and the number still available in the
+collection.
+
+--- Expansion error collection
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpansionErrors {
+    errors: Vec<ExpansionError>,
+}
+
+impl ExpansionErrors {
+    pub fn as_slice(&self) -> &[ExpansionError] {
+        &self.errors
+    }
+
+    pub fn into_vec(self) -> Vec<ExpansionError> {
+        self.errors
+    }
+}
+
+impl fmt::Display for ExpansionErrors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(first) = self.errors.first() {
+            write!(f, "{first}")?;
+            if self.errors.len() > 1 {
+                write!(f, " (and {} more expansion errors)", self.errors.len() - 1)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ExpansionErrors {}
+---
+
+@s Handing the Completed Plan to Output
+
+The non-mutating planning functions stop with all paths and bytes in memory.
+For callers that want to write only one input's tangled files,
+@code{write_outputs} passes the completed plan to Output's neutral writer.
+Main uses Output's broader multi-input entry point when it combines tangled
+and woven plans for a book.
+
+--- Write tangled outputs function
+pub fn write_outputs(
+    plan: &TanglePlan,
+    output_directory: &Path,
+    input: &Path,
+) -> Result<(), OutputError> {
+    write_planned_outputs(&plan.outputs, output_directory, input)
+}
+---
+
+For `Greeting`, the handoff is still the one `hello.txt` proposal shown at the
+beginning. Tangler has followed the reference, applied the LF policy, and
+finished every root without an expansion error. Output can now preflight the
+complete proposal before it creates or replaces any file.

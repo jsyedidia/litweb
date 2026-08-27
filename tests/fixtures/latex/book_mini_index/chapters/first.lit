@@ -1,0 +1,25 @@
+@title First Major Chapter
+
+@s Earlier definitions
+
+This short chapter supplies names that a later spread will use.
+
+--- src/first.rs
+pub struct EarlierDefinition;
+pub struct AlphaAnchor;
+pub struct BetaAnchor;
+pub struct DeltaAnchor;
+pub struct EpsilonAnchor;
+pub struct EtaAnchor;
+pub struct GammaAnchor;
+pub struct IotaAnchor;
+pub struct KappaAnchor;
+pub struct LambdaAnchor;
+pub struct ThetaAnchor;
+pub struct AnExtremelyLongIdentifierThatMustWrapInsideOneMiniIndexColumn;
+---
+
+@s A definition from the next chapter
+
+The first spread needs @code{FutureDefinition}, whose declaration appears in
+the next major chapter.

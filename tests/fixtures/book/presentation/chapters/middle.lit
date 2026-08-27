@@ -1,0 +1,11 @@
+@title Middle Page
+
+@s Middle titled section
+--- Cross-page uses
+@{First only}
+@{Remote}
+---
+Prose after code starts an implicit section with its following code.
+--- Middle local
+middle_local();
+---

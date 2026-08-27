@@ -1,0 +1,857 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Output
+
+@s Installing One Planned File
+
+Tangler ended with one complete proposal for the `Greeting` program. Suppose
+the user selected a directory named `generated` and asked only for tangled
+code:
+
+```text
+output directory "generated"
+protected input "greeting.lit"
+
+PlannedOutput
+|-- relative path "hello.txt"
+|-- bytes "Good morning\nfrom Litweb\n"
+`-- origin greeting.lit:5
+```
+
+Output is the boundary that turns this in-memory value into a filesystem
+change. The **filesystem** is the operating system's arrangement of files and
+directories. Output does not need to understand Rust, HTML, or the named blocks
+that produced the bytes; it needs to install those bytes without overwriting a
+source file or exposing a partly written destination.
+
+Here is the successful operation. The process number and counter in the
+temporary filename vary from one run to another:
+
+```text
+before
+|-- greeting.lit                  protected source
+`-- generated/                    empty
+
+while installing
+|-- greeting.lit                  unchanged
+`-- generated/
+    `-- .hello.txt.lw-<process>-<counter>.tmp
+        `-- "Good morning\nfrom Litweb\n"
+
+after
+|-- greeting.lit                  unchanged
+`-- generated/
+    `-- hello.txt
+        `-- "Good morning\nfrom Litweb\n"
+```
+
+Output first checks the complete request without writing. It then creates a
+new temporary file beside the destination, writes all the planned bytes, and
+renames that finished file to `hello.txt`. A successful @code{Ok(())} means
+that every requested file, not merely this one, reached its final destination.
+
+@s Values at the Output Boundary
+
+The three fields of @code{PlannedOutput} now have concrete meanings.
+@code{relative_path} says where the file belongs beneath the selected output
+directory, @code{bytes} holds its complete contents, and @code{origin}
+identifies the source request responsible for it. The same value can carry
+tangled code, a woven HTML page, or a presentation asset.
+
+--- Planned output model
+/// A complete file proposed by a Litweb output backend.
+///
+/// `relative_path` must stay beneath the output directory supplied to the
+/// writer: it cannot be empty, absolute, prefixed, or contain `..`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedOutput {
+    /// The file's path relative to the selected output directory.
+    pub relative_path: PathBuf,
+    /// The complete bytes to write.
+    pub bytes: Vec<u8>,
+    /// The source request responsible for the file.
+    pub origin: SourceOrigin,
+}
+---
+
+The writer also receives the selected output directory and a list of
+**protected inputs** that it must not replace. For a one-file document the
+list contains `greeting.lit`; for a book it contains the manifest and every
+loaded chapter. Its return type is @code{Result<(), OutputError>}: success
+carries no further value because the result is the new filesystem state.
+
+@s The Output Module
+
+The module keeps the neutral plan value, its structured errors, and the
+filesystem operations together. It depends on @code{SourceOrigin} for
+diagnostics, but it does not depend on Tangler, Weaver, or Main.
+
+--- src/output.rs
+//! Planned outputs and protected filesystem replacement.
+
+@{Output imports}
+@{Planned output model}
+@{Preflighted output model}
+@{Output diagnostics}
+@{Protected output writer}
+@{Single-input writer entry point}
+@{Validate a planned relative path}
+@{Preflight one destination}
+@{Compute a lexical absolute path}
+@{Temporary output machinery}
+@{Replace one output file}
+---
+
+The standard-library imports provide sets for comparing the whole plan,
+filesystem and writing operations, path components, and an atomic counter for
+temporary names. Here **atomic counter** means that several threads can take
+successive numbers without interfering with one another.
+
+--- Output imports
+use std::collections::HashSet;
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::parser::SourceOrigin;
+---
+
+@s From a Planned Path to a Comparison Path
+
+The running example uses several related paths. Keeping them distinct prevents
+an important class of mistakes:
+
+```text
+planned relative path       hello.txt
+selected output directory   generated
+joined destination          generated/hello.txt
+absolute comparison path    /work/project/generated/hello.txt
+canonical destination       unavailable until the file exists
+```
+
+A **relative path** is interpreted from some selected directory. An
+**absolute path** begins at the filesystem's root. Joining the first two lines
+produces the destination that Output will inspect and eventually change. The
+absolute form is a private comparison value; `/work/project` stands for this
+example's current working directory.
+
+The join is safe only if the planned path really stays below `generated`.
+Output therefore checks it first. A path may contain a harmless current
+directory component, as in `./hello.txt`. It may not be empty, absolute,
+platform-prefixed, or contain `..`, the component that means “parent
+directory.” Rejection occurs before the unsafe path is joined or anything is
+created.
+
+--- Validate a planned relative path
+fn validate_relative_path(path: &Path) -> Result<(), InvalidOutputPathReason> {
+    if path.is_absolute() {
+        return Err(InvalidOutputPathReason::Absolute);
+    }
+
+    let mut has_normal_component = false;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => has_normal_component = true,
+            Component::CurDir => {}
+            Component::ParentDir => return Err(InvalidOutputPathReason::ParentTraversal),
+            Component::RootDir => return Err(InvalidOutputPathReason::Absolute),
+            Component::Prefix(_) => return Err(InvalidOutputPathReason::PlatformPrefix),
+        }
+    }
+
+    if has_normal_component {
+        Ok(())
+    } else {
+        Err(InvalidOutputPathReason::Empty)
+    }
+}
+---
+
+The comparison path is made **lexically**: the function examines the written
+components, removes `.`, processes `..`, and does not require the destination
+to exist. Output retains the joined spelling for actual filesystem work and
+diagnostics.
+
+--- Compute a lexical absolute path
+fn lexical_absolute(path: &Path) -> io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    Ok(normalized)
+}
+---
+
+There is one more representation when paths already exist. A
+**canonical path** is obtained by asking the filesystem for the path after following
+symbolic links. Thus two different spellings that reach the same existing
+file can still be recognized as equal. Canonicalization supplements lexical
+comparison; it does not replace it, because a new destination has no existing
+file to canonicalize.
+
+The selected output directory is trusted. These checks confine the planned
+spelling, but they are not a sandbox against a hostile symbolic link or
+another process changing the filesystem between inspection and replacement.
+
+@s Preflighting One Destination
+
+**Preflight** is the read-only pass before installation. For
+`generated/hello.txt`, a successful preflight proceeds as follows:
+
+1. Compute its lexical absolute comparison path.
+2. Confirm that it differs from the protected `greeting.lit`, both lexically
+   and canonically when both paths exist.
+3. Inspect an existing destination. A directory cannot be replaced by the
+   planned file.
+4. Walk upward to the first existing ancestor and confirm that it is a
+   directory.
+5. If the destination is already a regular file, remember its permissions.
+
+**Permissions** record such choices as whether a file is writable or, on Unix,
+executable. Remembering the existing permissions lets the completed
+replacement retain them. A new destination instead receives the operating
+system's ordinary creation permissions. On Windows, an existing read-only
+destination fails preflight; Output does not clear that setting to force a
+replacement.
+
+--- Preflight one destination
+fn preflight_destination(
+    destination: &Path,
+    destination_absolute: &Path,
+    inputs: &[PathBuf],
+    origin: &SourceOrigin,
+) -> Result<Option<fs::Permissions>, OutputError> {
+    for input in inputs {
+        let input_absolute = lexical_absolute(input).map_err(|error| OutputError {
+            origin: origin.clone(),
+            path: destination.to_owned(),
+            kind: OutputErrorKind::Io {
+                action: OutputAction::ResolveCurrentDirectory,
+                error: error.kind(),
+            },
+        })?;
+
+        let canonical_collision = if destination.exists() && input.exists() {
+            match (fs::canonicalize(destination), fs::canonicalize(input)) {
+                (Ok(destination), Ok(input)) => destination == input,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if destination_absolute == input_absolute || canonical_collision {
+            return Err(OutputError {
+                origin: origin.clone(),
+                path: destination.to_owned(),
+                kind: OutputErrorKind::InputCollision,
+            });
+        }
+    }
+
+    let existing_permissions = match fs::metadata(destination) {
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(OutputError {
+                origin: origin.clone(),
+                path: destination.to_owned(),
+                kind: OutputErrorKind::DestinationIsDirectory,
+            });
+        }
+        Ok(metadata) if metadata.is_file() => {
+            let permissions = metadata.permissions();
+            #[cfg(windows)]
+            if permissions.readonly() {
+                return Err(OutputError {
+                    origin: origin.clone(),
+                    path: destination.to_owned(),
+                    kind: OutputErrorKind::Io {
+                        action: OutputAction::ReplaceDestination,
+                        error: io::ErrorKind::PermissionDenied,
+                    },
+                });
+            }
+            Some(permissions)
+        }
+        Ok(_) => None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) if error.kind() == io::ErrorKind::NotADirectory => {
+            return Err(OutputError {
+                origin: origin.clone(),
+                path: destination.to_owned(),
+                kind: OutputErrorKind::ParentIsNotDirectory,
+            });
+        }
+        Err(error) => {
+            return Err(OutputError {
+                origin: origin.clone(),
+                path: destination.to_owned(),
+                kind: OutputErrorKind::Io {
+                    action: OutputAction::InspectDestination,
+                    error: error.kind(),
+                },
+            });
+        }
+    };
+
+    let mut ancestor = destination.parent();
+    while let Some(path) = ancestor {
+        match fs::metadata(path) {
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(OutputError {
+                    origin: origin.clone(),
+                    path: destination.to_owned(),
+                    kind: OutputErrorKind::ParentIsNotDirectory,
+                });
+            }
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                ancestor = path.parent();
+            }
+            Err(error) => {
+                return Err(OutputError {
+                    origin: origin.clone(),
+                    path: destination.to_owned(),
+                    kind: OutputErrorKind::Io {
+                        action: OutputAction::InspectDestination,
+                        error: error.kind(),
+                    },
+                });
+            }
+        }
+    }
+    Ok(existing_permissions)
+}
+---
+
+@s Checking the Whole Plan Before Writing
+
+One good destination is not enough. Main may combine several tangled files,
+HTML pages, and presentation assets in one ordered list. Output must answer two
+questions before it writes:
+
+```text
+pass 1: inspect and collect every destination
+        no filesystem mutation
+
+pass 2: create parents and replace files in plan order
+        begins only if pass 1 succeeds completely
+```
+
+This two-pass order is the central safety invariant. A predictable path
+conflict in the last planned output cannot leave an earlier one replaced.
+Preflight cannot promise that later I/O will succeed: permissions can change,
+storage can fill, or another process can alter a path after it was inspected.
+
+The general public writer makes the two passes visible.
+
+--- Protected output writer
+/// Writes planned files beneath `output_directory` after checking the whole plan.
+///
+/// Predictable conflicts and unconfined relative paths fail before filesystem
+/// mutation. Each existing regular destination keeps its standard filesystem
+/// permissions. Replacement is atomic per file where the platform supports a
+/// replacing rename, but the complete output list is not a transaction.
+pub fn write_planned_outputs_protecting(
+    outputs: &[PlannedOutput],
+    output_directory: &Path,
+    inputs: &[PathBuf],
+) -> Result<(), OutputError> {
+    @{Preflight every planned destination}
+    @{Create directories and replace planned files}
+}
+---
+
+Each successful first-pass result keeps together the original proposal, its
+joined destination, its absolute comparison path, and any permissions that
+must be preserved.
+
+--- Preflighted output model
+struct PreflightedOutput<'a> {
+    output: &'a PlannedOutput,
+    destination: PathBuf,
+    absolute_destination: PathBuf,
+    existing_permissions: Option<fs::Permissions>,
+}
+---
+
+Suppose a second proposal names `assets/theme.css`. A set of absolute
+comparison paths detects two proposals that reach the same destination.
+Looking upward through every recorded destination detects a different
+conflict:
+
+```text
+invalid plan
+|-- assets                     planned as a file
+`-- assets/theme.css           needs assets to be a directory
+```
+
+Only after a destination agrees with the protected inputs and existing
+filesystem does the pass compare it with the planned outputs already seen.
+
+--- Preflight every planned destination
+let mut preflighted = Vec::with_capacity(outputs.len());
+let mut seen = HashSet::with_capacity(outputs.len());
+for output in outputs {
+    validate_relative_path(&output.relative_path).map_err(|reason| OutputError {
+        origin: output.origin.clone(),
+        path: output.relative_path.clone(),
+        kind: OutputErrorKind::InvalidRelativePath { reason },
+    })?;
+    let destination = output_directory.join(&output.relative_path);
+    let absolute_destination =
+        lexical_absolute(&destination).map_err(|error| OutputError {
+            origin: output.origin.clone(),
+            path: destination.clone(),
+            kind: OutputErrorKind::Io {
+                action: OutputAction::ResolveCurrentDirectory,
+                error: error.kind(),
+            },
+        })?;
+    let existing_permissions = preflight_destination(
+        &destination,
+        &absolute_destination,
+        inputs,
+        &output.origin,
+    )?;
+    if !seen.insert(absolute_destination.clone()) {
+        return Err(OutputError {
+            origin: output.origin.clone(),
+            path: destination,
+            kind: OutputErrorKind::DuplicateDestination,
+        });
+    }
+    preflighted.push(PreflightedOutput {
+        output,
+        destination,
+        absolute_destination,
+        existing_permissions,
+    });
+}
+
+for item in &preflighted {
+    if item
+        .absolute_destination
+        .ancestors()
+        .skip(1)
+        .any(|parent| seen.contains(parent))
+    {
+        return Err(OutputError {
+            origin: item.output.origin.clone(),
+            path: item.destination.clone(),
+            kind: OutputErrorKind::ParentIsPlannedFile,
+        });
+    }
+}
+---
+
+@s Creating Parent Directories
+
+After the complete first pass succeeds, Output enters the mutation pass. It
+creates missing parent directories and installs files in the order in which
+the backends planned them. The running example already has `generated`; for
+`generated/nested/hello.txt`, @code{create_dir_all} would create every missing
+directory in that path.
+
+--- Create directories and replace planned files
+for item in preflighted {
+    if let Some(parent) = item.destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| OutputError {
+            origin: item.output.origin.clone(),
+            path: item.destination.clone(),
+            kind: OutputErrorKind::Io {
+                action: OutputAction::CreateDirectory,
+                error: error.kind(),
+            },
+        })?;
+    }
+    replace_file(
+        item.output,
+        &item.destination,
+        item.existing_permissions.as_ref(),
+    )?;
+}
+Ok(())
+---
+
+Directory creation and replacement can still fail unexpectedly. Because
+mutation has begun, Output does not remove earlier directories or undo an
+earlier successful file.
+
+@s Creating a Sibling Temporary File
+
+A **sibling** has the same parent directory as the destination. The temporary
+for `generated/hello.txt` is therefore created inside `generated`, with a name
+of this form:
+
+```text
+.hello.txt.lw-<process>-<counter>.tmp
+```
+
+The destination name, process identifier, and increasing counter make a
+collision unlikely. @code{create_new} supplies the decisive filesystem check:
+if that candidate already exists, the loop tries the next counter value
+instead of truncating somebody else's file.
+
+Keeping the temporary beside its destination allows the final same-directory
+rename to expose the finished file under its final name without copying bytes
+through that name.
+
+--- Temporary output machinery
+static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
+
+fn create_temporary(
+    destination: &Path,
+    origin: &SourceOrigin,
+) -> Result<(File, PathBuf), OutputError> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let filename = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    loop {
+        let number = NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed);
+        let temporary_path = parent.join(format!(
+            ".{filename}.lw-{}-{number}.tmp",
+            std::process::id()
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+        {
+            Ok(file) => return Ok((file, temporary_path)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(OutputError {
+                    origin: origin.clone(),
+                    path: destination.to_owned(),
+                    kind: OutputErrorKind::Io {
+                        action: OutputAction::CreateTemporaryFile,
+                        error: error.kind(),
+                    },
+                });
+            }
+        }
+    }
+}
+---
+
+@s Replacing One File
+
+@code{replace_file} now follows the middle state in the opening trace:
+
+1. Create the new sibling temporary.
+2. Write every planned byte and call @code{flush} to complete the ordinary
+   @code{Write} sequence.
+3. If a regular destination existed, copy its saved permissions to the
+   completed temporary.
+4. Close the temporary file handle.
+5. Rename the temporary to the destination.
+
+A write or permission failure still leaves the old destination untouched. The
+writer attempts to remove the temporary before returning the structured
+error.
+
+--- Replace one output file
+fn replace_file(
+    output: &PlannedOutput,
+    destination: &Path,
+    existing_permissions: Option<&fs::Permissions>,
+) -> Result<(), OutputError> {
+    let (mut temporary, temporary_path) = create_temporary(destination, &output.origin)?;
+    if let Err(error) = temporary
+        .write_all(&output.bytes)
+        .and_then(|()| temporary.flush())
+    {
+        drop(temporary);
+        let _ = fs::remove_file(&temporary_path);
+        return Err(OutputError {
+            origin: output.origin.clone(),
+            path: destination.to_owned(),
+            kind: OutputErrorKind::Io {
+                action: OutputAction::WriteTemporaryFile,
+                error: error.kind(),
+            },
+        });
+    }
+    let permission_result = match existing_permissions {
+        Some(permissions) => temporary.set_permissions(permissions.clone()),
+        None => Ok(()),
+    };
+    if let Err(error) = permission_result {
+        drop(temporary);
+        let _ = fs::remove_file(&temporary_path);
+        return Err(OutputError {
+            origin: output.origin.clone(),
+            path: destination.to_owned(),
+            kind: OutputErrorKind::Io {
+                action: OutputAction::PreservePermissions,
+                error: error.kind(),
+            },
+        });
+    }
+    drop(temporary);
+
+    #[cfg(windows)]
+    if destination.exists() {
+        if let Err(error) = fs::remove_file(destination) {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(OutputError {
+                origin: output.origin.clone(),
+                path: destination.to_owned(),
+                kind: OutputErrorKind::Io {
+                    action: OutputAction::ReplaceDestination,
+                    error: error.kind(),
+                },
+            });
+        }
+    }
+
+    if let Err(error) = fs::rename(&temporary_path, destination) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(OutputError {
+            origin: output.origin.clone(),
+            path: destination.to_owned(),
+            kind: OutputErrorKind::Io {
+                action: OutputAction::ReplaceDestination,
+                error: error.kind(),
+            },
+        });
+    }
+    Ok(())
+}
+---
+
+@s The Limits of Replacement
+
+Four boundaries keep “atomic replacement” from promising too much.
+
+**One file on platforms with replacing rename.** When the platform can rename
+the temporary directly over an existing destination, another reader sees the
+old complete file or the new complete file, not partly written new contents.
+This is **atomic visibility** for one successful replacement.
+
+**Several planned files.** The output list is not a **transaction**, an
+operation that either completes everything or undoes everything. If
+`first.txt` is replaced and an unexpected failure prevents `second.txt`,
+`first.txt` remains replaced. Newly created directories also remain.
+
+**An existing file on Windows.** Rust's standard filesystem interface requires
+this implementation to remove an existing destination before renaming the
+temporary. During that gap another reader can see no destination. If the
+rename then fails, the old file is already gone. A writable existing file
+retains its saved permissions; a read-only one was rejected during preflight.
+
+**Cleanup and sudden system failure.** Temporary cleanup is best effort. An
+unusual cleanup error can leave a `.tmp` sibling because hiding the primary
+failure would be worse. @code{flush} completes the ordinary Rust write path,
+but Output does not call @code{sync_all} on the file or synchronize its
+directory. It therefore makes no promise that a sudden power loss cannot lose
+a recent change.
+
+@s Structured Output Failures
+
+The successful path explains the information needed when something fails:
+
+```text
+OutputError
+|-- origin       source request responsible for the output
+|-- path         rejected relative path or affected destination
+`-- kind
+    |-- failed Output invariant
+    `-- I/O action + portable operating-system error kind
+```
+
+An **invariant** is a rule that must remain true. Invalid planned paths,
+protected-input collisions, duplicate destinations, planned-file parents,
+destination directories, and bad existing parents each identify a failed
+Output invariant. Failures from the operating system instead record what
+Output was trying to do and an @code{io::ErrorKind} such as permission denied.
+
+The action names follow the algorithm already traced: resolve a comparison
+path, inspect a destination, create a directory or temporary, write it,
+preserve permissions, and replace the destination.
+
+--- Output diagnostics
+/// A filesystem operation that can fail while installing planned output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputAction {
+    ResolveCurrentDirectory,
+    InspectDestination,
+    CreateDirectory,
+    CreateTemporaryFile,
+    WriteTemporaryFile,
+    PreservePermissions,
+    ReplaceDestination,
+}
+
+impl fmt::Display for OutputAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ResolveCurrentDirectory => f.write_str("resolve the current directory"),
+            Self::InspectDestination => f.write_str("inspect the destination"),
+            Self::CreateDirectory => f.write_str("create an output directory"),
+            Self::CreateTemporaryFile => f.write_str("create a temporary output file"),
+            Self::WriteTemporaryFile => f.write_str("write a temporary output file"),
+            Self::PreservePermissions => f.write_str("preserve destination permissions"),
+            Self::ReplaceDestination => f.write_str("replace the destination"),
+        }
+    }
+}
+
+/// A filesystem or path conflict associated with one requested output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputError {
+    /// The source request responsible for the output.
+    pub origin: SourceOrigin,
+    /// The rejected relative path or affected joined destination.
+    pub path: PathBuf,
+    /// The structured reason writing could not continue.
+    pub kind: OutputErrorKind,
+}
+
+/// Why a planned relative path cannot be confined to the output directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidOutputPathReason {
+    Empty,
+    Absolute,
+    PlatformPrefix,
+    ParentTraversal,
+}
+
+impl fmt::Display for InvalidOutputPathReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("the path is empty"),
+            Self::Absolute => f.write_str("the path is absolute"),
+            Self::PlatformPrefix => f.write_str("the path has a platform prefix"),
+            Self::ParentTraversal => {
+                f.write_str("the path contains a parent-directory component")
+            }
+        }
+    }
+}
+
+/// The structured reason an output could not be installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputErrorKind {
+    InvalidRelativePath {
+        reason: InvalidOutputPathReason,
+    },
+    InputCollision,
+    DuplicateDestination,
+    ParentIsPlannedFile,
+    DestinationIsDirectory,
+    ParentIsNotDirectory,
+    Io {
+        action: OutputAction,
+        error: io::ErrorKind,
+    },
+}
+
+impl fmt::Display for OutputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: error: output {}: ",
+            self.origin,
+            self.path.display()
+        )?;
+        match self.kind {
+            OutputErrorKind::InvalidRelativePath { reason } => {
+                write!(f, "invalid planned relative path: {reason}")
+            }
+            OutputErrorKind::InputCollision => {
+                f.write_str("the output would overwrite the input file")
+            }
+            OutputErrorKind::DuplicateDestination => {
+                f.write_str("more than one generated file has this destination")
+            }
+            OutputErrorKind::ParentIsPlannedFile => f.write_str(
+                "another generated file occupies a parent directory of this output",
+            ),
+            OutputErrorKind::DestinationIsDirectory => {
+                f.write_str("the destination is an existing directory")
+            }
+            OutputErrorKind::ParentIsNotDirectory => {
+                f.write_str("an output parent is not a directory")
+            }
+            OutputErrorKind::Io { action, error } => {
+                write!(f, "could not {action}: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for OutputError {}
+---
+
+Output formats one boundary message, but library callers can inspect these
+fields without parsing that sentence. Main decides when to print it and which
+process exit status to return.
+
+@s Smaller Writer Adapters
+
+The general function accepts every protected source because Main must protect
+all chapters of a book. A common one-file caller can use the shorter
+@code{write_planned_outputs}; it turns one input into a one-element list and
+delegates without changing any safety rule.
+
+--- Single-input writer entry point
+/// Writes planned files while protecting one input path from replacement.
+pub fn write_planned_outputs(
+    outputs: &[PlannedOutput],
+    output_directory: &Path,
+    input: &Path,
+) -> Result<(), OutputError> {
+    write_planned_outputs_protecting(outputs, output_directory, &[input.to_path_buf()])
+}
+---
+
+Tangler retains an older @code{write_outputs} convenience that takes a
+@code{TanglePlan} and calls this one-input adapter. Weaver and Main use the
+same neutral @code{PlannedOutput} values; no adapter defines a second output
+policy.
+
+@s What Output Promises
+
+The three possible endings are now precise:
+
+```text
+on success
+|-- every planned destination contains its complete bytes
+|-- an existing regular destination keeps its standard permissions
+|-- protected inputs are unchanged
+`-- no temporary sibling created by this call remains
+
+on preflight failure
+`-- no filesystem mutation began
+
+on mutation-time failure
+|-- the error identifies the output and failed action
+|-- cleanup of any created failing temporary was attempted
+`-- earlier replacements and created directories are not rolled back
+```
+
+Success does not claim preservation of ownership, access-control lists,
+extended attributes, timestamps, or metadata beyond
+@code{std::fs::Permissions}. The success statement about temporary files is
+limited to siblings created by that call.
+
+Main now has one operation left to perform. It chooses Tangle, Weave, or both;
+combines every proposal into one ordered list; supplies the input file or all
+sources of a book; calls @code{write_planned_outputs_protecting} once; and
+reports the structured result at the command-line boundary.

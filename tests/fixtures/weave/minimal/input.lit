@@ -1,0 +1,9 @@
+@title Minimal Weave
+
+@s One output
+
+This is a *small* woven program.
+
+--- minimal.txt
+hello & goodbye
+---

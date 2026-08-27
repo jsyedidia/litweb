@@ -1,0 +1,96 @@
+@title Presentation Sections
+
+@s Empty explicit section
+@s
+
+
+@s Prose only
+This section contains prose and no code.
+
+@s Code only
+--- Code only
+code_only();
+---
+
+@s Prose and code
+The prose and code share one presentation section.
+--- Prose and code
+prose_and_code();
+---
+
+@s Prose after code
+The first prose block.
+--- Prose then code
+first();
+---
+The second prose block starts an implicit section.
+
+@s Prose and consecutive code
+The prose accompanies the first code block.
+--- Prose code one
+one();
+---
+--- Prose code two
+two();
+---
+
+@s Code prose code
+--- Code prose first
+first();
+---
+The prose after code starts another presentation section.
+--- Code prose second
+second();
+---
+
+@s Three code blocks
+--- Three one
+one();
+---
+--- Three two
+two();
+---
+--- Three three
+three();
+---
+
+@s Hidden blocks and commands
+Visible prose precedes hidden and visible code.
+@code_type rust .rs
+--- Hidden base --- noWeave
+hidden_base();
+---
+--- Visible after hidden
+visible();
+---
+@comment_type // %s
+--- Hidden base --- noWeave +=
+hidden_addition();
+---
+
+@s Hidden code between prose blocks
+First visible prose.
+--- Hidden separator --- noWeave
+hidden_separator();
+---
+Second visible prose still starts an implicit section.
+
+@s Hidden-only explicit section
+--- Hidden only --- noWeave
+not_rendered();
+---
+
+@s Relationships
+The forward prose reference @{Target} links to the first visible definition.
+--- Target
+base();
+---
+--- Target +=
+addition();
+---
+--- Target :=
+replacement();
+---
+--- Use target
+@{Target}
+---

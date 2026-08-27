@@ -1,0 +1,80 @@
+/*
+ * Litweb's GitHub-inspired light theme for Prism.
+ * Colors begin with Primer Primitives 11.9.0 prettylights syntax values,
+ * with restrained Litweb refinements. Primer is MIT licensed by GitHub, Inc.
+ */
+code[class*="language-"],
+pre[class*="language-"] {
+    color: #1f2328;
+    text-shadow: none;
+}
+pre[class*="language-"] {
+    background: #fafbfc;
+}
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+    color: #4d5762;
+}
+.token.punctuation,
+.token.operator {
+    color: #1f2328;
+}
+.token.property,
+.token.constant,
+.token.symbol,
+.token.boolean,
+.token.number {
+    color: #0550ae;
+}
+.token.tag,
+.token.selector,
+.token.attr-name {
+    color: #0550ae;
+}
+.token.string,
+.token.char,
+.token.attr-value,
+.token.builtin,
+.token.url {
+    color: #0a3069;
+}
+.token.keyword,
+.token.atrule {
+    color: #9a4653;
+}
+.token.function {
+    color: #3f5f7f;
+}
+.token.class-name {
+    color: #6639ba;
+}
+.token.regex {
+    color: #116329;
+}
+.token.variable,
+.token.important {
+    color: #953800;
+}
+.token.deleted {
+    color: #82071e;
+    background: #ffebe9;
+}
+.token.inserted {
+    color: #116329;
+    background: #dafbe1;
+}
+.token.bold,
+.token.important {
+    font-weight: 600;
+}
+.token.italic {
+    font-style: italic;
+}
+.token.entity {
+    cursor: help;
+}
+.token.namespace {
+    color: #4d5762;
+}

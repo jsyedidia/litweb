@@ -1,0 +1,26 @@
+@title Addition and Redefinition
+
+@s Modifiers
+
+This fixture characterizes additive and redefining blocks.
+
+--- modifiers.txt
+@{Added lines}
+@{Replaced lines}
+---
+
+--- Added lines
+first
+---
+
+--- Added lines +=
+second
+---
+
+--- Replaced lines
+old
+---
+
+--- Replaced lines :=
+new
+---

@@ -1,0 +1,7 @@
+@s Normalized duplicate
+--- same.rs
+first
+---
+--- "same.rs"
+second
+---

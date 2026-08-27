@@ -1,0 +1,7 @@
+@s No partial output
+--- good.txt
+good
+---
+--- bad.txt
+@{Missing}
+---

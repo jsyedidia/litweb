@@ -1,0 +1,7 @@
+@s Self cycle
+--- output.txt
+@{Loop}
+---
+--- Loop
+@{Loop}
+---

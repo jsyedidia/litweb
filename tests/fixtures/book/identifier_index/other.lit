@@ -1,0 +1,12 @@
+@code_type c .c
+@title C Appendix
+
+@s Unsupported language
+
+The @code{c_name} identifier and the code below are not analyzed yet.
+
+--- appendix.c
+int c_name(void) {
+    return 0;
+}
+---

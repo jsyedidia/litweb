@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Middle Page — Presentation Book</title>
+<style>
+body {
+    color: #222;
+    background: #fff;
+    font-family: Georgia, serif;
+    line-height: 1.5;
+    margin: 0;
+}
+main {
+    max-width: 56rem;
+    margin: 0 auto;
+    padding: clamp(0.75rem, 4vw, 2rem);
+}
+.section {
+    margin: 2.5rem 0;
+}
+.section-heading {
+    font-size: 1rem;
+    margin: 0 0 1rem;
+}
+.section-opening > .section-heading,
+.section-opening > p,
+.section-opening > .codeblock_name {
+    display: inline;
+    margin: 0;
+}
+.section-number,
+.chapter-number,
+.definition-operator {
+    white-space: nowrap;
+}
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.codeblock {
+    margin: 1.25rem 0;
+}
+.codeblock-first {
+    margin-top: 0;
+}
+.codeblock_name {
+    margin-left: min(1rem, 3vw);
+    font-family: monospace;
+    overflow-wrap: anywhere;
+}
+.section-opening > .codeblock_name {
+    margin-left: 0;
+}
+.definition-operator {
+    font-family: Georgia, serif;
+}
+code {
+    white-space: pre-wrap;
+}
+pre code {
+    white-space: inherit;
+}
+pre {
+    overflow-x: auto;
+    border: 1px solid #d8d8d8;
+    background: #f7f7f7;
+    padding: 0.8rem 1rem;
+    line-height: 1.35;
+}
+.table-scroll {
+    overflow-x: auto;
+    margin: 1.25rem 0;
+}
+.table-scroll table {
+    border-collapse: collapse;
+    width: max-content;
+    min-width: 100%;
+}
+.table-scroll th,
+.table-scroll td {
+    border: 1px solid #d8d8d8;
+    padding: 0.45rem 0.7rem;
+    vertical-align: top;
+}
+.table-scroll th {
+    background: #f7f7f7;
+}
+.table-align-left {
+    text-align: left;
+}
+.table-align-center {
+    text-align: center;
+}
+.table-align-right {
+    text-align: right;
+}
+.nocode {
+    color: #555;
+    font-style: italic;
+}
+.seealso {
+    margin: 0.2rem 0 0 min(1rem, 3vw);
+    font-size: 0.9rem;
+    color: #555;
+}
+.section-name a,
+.section-reference a,
+.nocode a,
+.seealso a {
+    text-decoration: none;
+}
+.section-name a:focus-visible,
+.section-reference a:focus-visible,
+.nocode a:focus-visible,
+.seealso a:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+a {
+    color: #245b8a;
+}
+.book-navigation {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+.book-navigation .contents {
+    margin-inline: auto;
+}
+.book-contents ol {
+    list-style: none;
+    margin-top: 0.35rem;
+    padding-left: 1.5rem;
+}
+.book-contents > ol {
+    padding-left: 0;
+}
+</style>
+</head>
+<body>
+<main>
+<h1><span class="chapter-number">2.</span> Middle Page</h1>
+<nav class="book-navigation" aria-label="Book navigation">
+<a rel="prev" href="first.html">Previous: First</a>
+<a class="contents" href="../index.html">Contents</a>
+<a rel="next" href="last.html">Next: Last</a>
+</nav>
+<section class="section" id="2:1">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">1.</span> <span class="section-title">Middle titled section</span>.</h2>
+<div class="codeblock_name"><span class="section-name">⟨Cross-page uses <a href="#2:1" aria-label="section 1">1</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre class="language-rust"><code class="language-rust"><span class="nocode">⟨First only <a href="first.html#1:3" aria-label="section 1.3">1.3</a>⟩</span>
+<span class="nocode">⟨Remote <a href="last.html#3:3" aria-label="section 3.3">3.3</a>⟩</span>
+</code></pre>
+</div>
+</section>
+<section class="section" id="2:2">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">2.</span> <span class="visually-hidden">Untitled section</span></h2>
+<p>Prose after code starts an implicit section with its following code.</p>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span class="section-name">⟨Middle local <a href="#2:2" aria-label="section 2">2</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre class="language-rust"><code class="language-rust">middle_local();
+</code></pre>
+</div>
+</section>
+<nav class="book-navigation" aria-label="Book navigation">
+<a rel="prev" href="first.html">Previous: First</a>
+<a class="contents" href="../index.html">Contents</a>
+<a rel="next" href="last.html">Next: Last</a>
+</nav>
+</main>
+</body>
+</html>

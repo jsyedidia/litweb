@@ -1,0 +1,13 @@
+@title Last Page
+
+@s Last titled section
+The repeated name is local to this chapter.
+--- Shared
+last_shared();
+---
+--- Last use
+@{Shared}
+---
+--- Remote
+remote();
+---

@@ -1,0 +1,60 @@
+@code_type rust .rs
+@comment_type // %s
+@title LaTeX # & _ Demonstration
+
+@s Distance & escaping
+
+This **small [guide](https://example.com/a_b?x=1&y=2)
+matters**, as does *multiline
+emphasis*. Literal code preserves `  @{not active}  `, while
+@code{value_1 & value_2} is Rust. The equation $d^2 = x^2 + y^2$ remains TeX.
+The implementation is in @{Compute_value #1}. An [unsafe](javascript:alert)
+target stays visible. Unicode prose includes café and an em dash — safely.
+
+- A list item uses @code{Graph}.
+- A second item continues
+  on another physical line.
+
+3. Ordered values may begin elsewhere.
+4. Their numbering continues.
+
+```text
+literal \command { braces } % # $ & _ ^ ~
+This deliberately long fixed-width example line contains enough words and symbols to exceed an ordinary printed measure without disappearing beyond the right edge.
+```
+
+| Form | Meaning | Count |
+| :--- | :---: | ---: |
+| `a_b` | *centered* | 2 |
+| @code{Graph} | [safe](guide.html) | $n+1$ |
+
+$$
+\begin{aligned}
+d^2 &= x^2 + y^2 \\
+    &= 25
+\end{aligned}
+$$
+
+--- demo.rs
+fn main() {
+    @{Compute_value #1}
+    let path = r"C:\very\long\path\whose\contents\make\this\source\line\wrap\without\becoming\active\LaTeX";
+    println!("{path}");
+}
+---
+
+--- Compute_value #1
+struct Graph {
+    value_1: i32,
+}
+
+fn squared_distance(x: i32, y: i32) -> i32 {
+    x * x + y * y
+}
+---
+
+--- Compute_value #1 +=
+fn graph_value(graph: &Graph) -> i32 {
+    graph.value_1
+}
+---

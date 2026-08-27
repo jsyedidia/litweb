@@ -1,0 +1,812 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Book Weaving
+
+@s From One Page to the Greetings Book
+
+The Book chapter loaded this exact manifest:
+
+```text
+@book
+@title Greetings
+@code_type text .txt
+@comment_type none
+
+This book contains three short greetings.
+
+[English](english.lit)
+    [A friendlier greeting](friendly.lit)
+[Spanish](spanish.lit)
+```
+
+To isolate page topology, this first weave disables identifier indexing and
+syntax highlighting. No optional index or asset outputs can obscure the page
+order.
+
+Book Weaving keeps the shared presentation layout and indexes from Woven
+Document, but divides the result among an ordered group of HTML pages:
+
+```text
+WeavePlan
+|-- greetings.html
+|-- english.html
+|-- friendly.html
+`-- spanish.html
+```
+
+The first path comes from the manifest filename and is the contents page. The
+remaining paths come from the chapter filenames, but the words printed on
+those pages come from two other sources.
+
+`english.html` is chapter 1. Its navigation label is `English`, while its
+page title is `An English Greeting`. `friendly.html` is minor chapter 1.1;
+its navigation label is `A friendlier greeting`, while its page title is
+`A Friendly Greeting`. `spanish.html` is chapter 2; its navigation label is
+`Spanish`, while its page title is `Un saludo`.
+
+The manifest selects text rather than Rust, so Identifier returns no entries.
+The four-page plan therefore has no empty identifier-index page and no links
+to one. We will first build these four pages, then add cross-page
+relationships and an identifier page as separate extensions.
+
+@s Planning Book Pages
+
+`plan_book_weave` makes the order above explicit. It first plans the contents
+page, then walks the loaded chapters in manifest order. For `Greetings`, the
+loop appends English, the friendlier greeting, and Spanish. Because
+`identifier_path` is `None`, the final branch appends nothing.
+
+Every output receives its portable relative path, complete page bytes, and
+the source origin that proposed it. Page-specific color choices are passed to
+the renderers; Presentation explains them, including the explicitly selected
+custom CSS that may be read. This function does not alter the filesystem.
+
+--- Plan book pages
+fn plan_book_weave(
+    program: &Program,
+    book: &BookMetadata,
+    data: &WeaveData<'_>,
+    identifiers: &LocatedIdentifierIndex,
+    command_line_scheme: Option<&Path>,
+    errors: &mut Vec<WeaveError>,
+) -> Vec<PlannedOutput> {
+    let Some(paths) = book_html_paths(program, errors) else {
+        return Vec::new();
+    };
+    let identifier_path =
+        book_identifier_index_path(program, &paths, identifiers, errors);
+    let contents_color_scheme =
+        page_color_scheme(program, None, command_line_scheme, errors);
+    let mut outputs = Vec::with_capacity(program.chapters.len() + 2);
+    outputs.push(PlannedOutput {
+        relative_path: paths.contents.clone(),
+        bytes: render_contents_document(
+            program,
+            book,
+            &paths,
+            data,
+            identifier_path.as_deref(),
+            &contents_color_scheme,
+            errors,
+        )
+        .into_bytes(),
+        origin: program.origin.clone(),
+    });
+    for (chapter_index, chapter) in program.chapters.iter().enumerate() {
+        let color_scheme =
+            page_color_scheme(program, Some(chapter), command_line_scheme, errors);
+        outputs.push(PlannedOutput {
+            relative_path: paths.chapters[chapter_index].clone(),
+            bytes: render_chapter_document(
+                program,
+                chapter_index,
+                data,
+                &paths,
+                identifier_path.as_deref(),
+                &color_scheme,
+                errors,
+            )
+            .into_bytes(),
+            origin: chapter.origin.clone(),
+        });
+    }
+    if let Some(path) = identifier_path {
+        outputs.push(PlannedOutput {
+            relative_path: path.clone(),
+            bytes: render_book_identifier_index(program, &paths, identifiers, &path)
+                .into_bytes(),
+            origin: program.origin.clone(),
+        });
+    }
+    outputs
+}
+
+struct BookHtmlPaths {
+    contents: PathBuf,
+    chapters: Vec<PathBuf>,
+}
+
+fn book_html_paths(
+    program: &Program,
+    errors: &mut Vec<WeaveError>,
+) -> Option<BookHtmlPaths> {
+    let contents = match html_output_name(program) {
+        Ok(path) => path,
+        Err(error) => {
+            errors.push(error);
+            return None;
+        }
+    };
+    let chapters = program
+        .chapters
+        .iter()
+        .map(|chapter| {
+            chapter
+                .book
+                .as_ref()
+                .expect("a loaded book chapter has book metadata")
+                .source_path
+                .with_extension("html")
+        })
+        .collect::<Vec<_>>();
+
+    for (chapter, path) in program.chapters.iter().zip(&chapters) {
+        if *path == contents {
+            let metadata = chapter
+                .book
+                .as_ref()
+                .expect("a loaded book chapter has book metadata");
+            errors.push(WeaveError {
+                origin: metadata.label_origin.clone(),
+                kind: WeaveErrorKind::ContentsPathCollision { path: path.clone() },
+            });
+        }
+    }
+
+    Some(BookHtmlPaths { contents, chapters })
+}
+---
+
+@s Rendering a Book Contents Page
+
+`greetings.html` begins with the book title `Greetings`, followed by the
+manifest introduction and the nested chapter list. The list is rendered from
+loaded chapter metadata, not by reinterpreting Markdown links in the
+introduction.
+
+The contents page has no current chapter. If manifest prose contains a
+named-block reference, a uniquely resolved target will therefore receive a
+cross-page link rather than a chapter-local fragment. The finished body is
+passed to the shared book document shell explained in Presentation.
+
+--- Render a book contents page
+fn render_contents_document(
+    program: &Program,
+    book: &BookMetadata,
+    paths: &BookHtmlPaths,
+    data: &WeaveData<'_>,
+    identifier_path: Option<&Path>,
+    color_scheme: &PageColorScheme,
+    errors: &mut Vec<WeaveError>,
+) -> String {
+    let page_style = if identifier_path.is_some() {
+        BookPageStyle::IdentifierNavigation
+    } else {
+        BookPageStyle::Ordinary
+    };
+    let mut body = String::new();
+    body.push_str("<h1>");
+    push_escaped_text(&mut body, &program.title);
+    body.push_str("</h1>\n");
+
+    let introduction = Block {
+        origin: program.origin.clone(),
+        kind: BlockKind::Prose,
+        lines: book.introduction_lines.clone(),
+    };
+    let context = RenderContext {
+        current_chapter: None,
+        current_path: &paths.contents,
+        single_page: false,
+        highlighting: color_scheme.css().is_some(),
+        book_paths: Some(paths),
+    };
+    render_prose(
+        &mut body,
+        &introduction,
+        &context,
+        data.resolved,
+        data.index,
+        errors,
+    );
+    render_contents_list(&mut body, program, paths);
+    if let Some(identifier_path) = identifier_path {
+        render_contents_index_link(&mut body, &paths.contents, identifier_path);
+    }
+    let uses_math = page_contains_math(&body);
+    let highlight_scheme = page_contains_highlighting(&body).then_some(color_scheme);
+    let mut output = String::new();
+    render_book_head(
+        &mut output,
+        &program.title,
+        page_style,
+        &paths.contents,
+        uses_math,
+        highlight_scheme,
+    );
+    output.push_str(&body);
+    output.push_str("</main>\n</body>\n</html>\n");
+    output
+}
+---
+
+@s Rendering the Book Contents List
+
+The `Greetings` contents list has two outer items, English and Spanish. The
+friendlier greeting is a nested item beneath English because its chapter
+number is 1.1. Every visible number, navigation label, and destination comes
+from loaded book metadata:
+
+```text
+1. English                 english.html
+   1.1 A friendlier greeting  friendly.html
+2. Spanish                 spanish.html
+```
+
+The renderer opens a nested ordered list for consecutive minor chapters and
+returns to the outer list at the next major chapter.
+
+--- Render the book contents list
+fn render_contents_list(output: &mut String, program: &Program, paths: &BookHtmlPaths) {
+    output.push_str("<nav class=\"book-contents\" aria-label=\"Contents\">\n<ol>\n");
+    let mut chapter = 0;
+    while chapter < program.chapters.len() {
+        let major = &program.chapters[chapter];
+        render_contents_link(output, major, &paths.contents, &paths.chapters[chapter]);
+        chapter += 1;
+        if chapter < program.chapters.len() && program.chapters[chapter].minor_number != 0
+        {
+            output.push_str("\n<ol>\n");
+            while chapter < program.chapters.len()
+                && program.chapters[chapter].minor_number != 0
+            {
+                render_contents_link(
+                    output,
+                    &program.chapters[chapter],
+                    &paths.contents,
+                    &paths.chapters[chapter],
+                );
+                output.push_str("</li>\n");
+                chapter += 1;
+            }
+            output.push_str("</ol>\n");
+        }
+        output.push_str("</li>\n");
+    }
+    output.push_str("</ol>\n</nav>\n");
+}
+
+fn render_contents_link(
+    output: &mut String,
+    chapter: &Chapter,
+    contents_path: &Path,
+    chapter_path: &Path,
+) {
+    let metadata = chapter
+        .book
+        .as_ref()
+        .expect("a loaded book chapter has book metadata");
+    output.push_str("<li><a href=\"");
+    push_escaped_attribute(output, &relative_url(contents_path, chapter_path));
+    output.push_str("\">");
+    push_escaped_text(output, &chapter.number());
+    output.push_str(". ");
+    push_escaped_text(output, &metadata.navigation_label);
+    output.push_str("</a>");
+}
+---
+
+@s Rendering a Book Chapter Page
+
+`english.html` makes the three names from the opening visible. Its document
+title is `An English Greeting — Greetings`; its `h1` begins
+`1. An English Greeting`; and its navigation uses the shorter labels
+`A friendlier greeting` and `Contents`.
+
+The same renderer handles chapters 1.1 and 2. It adds navigation above and
+below the content, creates a render context for the chapter's own page path,
+and walks only that chapter's derived presentation sections. The shared
+section numbers and relationship locations are not recomputed.
+
+--- Render a book chapter page
+
+fn render_chapter_document(
+    program: &Program,
+    chapter_index: usize,
+    data: &WeaveData<'_>,
+    paths: &BookHtmlPaths,
+    identifier_path: Option<&Path>,
+    color_scheme: &PageColorScheme,
+    errors: &mut Vec<WeaveError>,
+) -> String {
+    let chapter = &program.chapters[chapter_index];
+    let document_title = format!("{} — {}", chapter.title, program.title);
+    let page_style = if identifier_path.is_some() {
+        BookPageStyle::IdentifierNavigation
+    } else {
+        BookPageStyle::Ordinary
+    };
+    let mut body = String::new();
+    body.push_str("<h1><span class=\"chapter-number\">");
+    push_escaped_text(&mut body, &chapter.number());
+    body.push_str(".</span> ");
+    push_escaped_text(&mut body, &chapter.title);
+    body.push_str("</h1>\n");
+
+    render_book_navigation(&mut body, program, paths, chapter_index, identifier_path);
+    let context = RenderContext {
+        current_chapter: Some(chapter_index),
+        current_path: &paths.chapters[chapter_index],
+        single_page: false,
+        highlighting: color_scheme.css().is_some(),
+        book_paths: Some(paths),
+    };
+    render_chapter_sections(
+        &mut body,
+        chapter,
+        &data.layout.chapters[chapter_index],
+        &context,
+        data.resolved,
+        data.index,
+        errors,
+    );
+    render_book_navigation(&mut body, program, paths, chapter_index, identifier_path);
+    let uses_math = page_contains_math(&body);
+    let highlight_scheme = page_contains_highlighting(&body).then_some(color_scheme);
+    let mut output = String::new();
+    render_book_head(
+        &mut output,
+        &document_title,
+        page_style,
+        &paths.chapters[chapter_index],
+        uses_math,
+        highlight_scheme,
+    );
+    output.push_str(&body);
+    output.push_str("</main>\n</body>\n</html>\n");
+    output
+}
+---
+
+@s Rendering Book Navigation
+
+Manifest order also determines the navigation row:
+
+- English has `Contents` and `Next: A friendlier greeting`;
+- the friendlier page has `Previous: English`, `Contents`, and
+  `Next: Spanish`; and
+- Spanish has `Previous: A friendlier greeting` and `Contents`.
+
+The page title never substitutes for these navigation labels. Each row
+appears above and below the chapter content. When a book later gains an
+identifier page, its link joins `Contents` in the middle of the row.
+
+The small link helper supplies `prev` or `next` relationship metadata,
+relative URLs, prefixes, and escaped labels.
+
+--- Render book navigation
+
+fn render_book_navigation(
+    output: &mut String,
+    program: &Program,
+    paths: &BookHtmlPaths,
+    chapter_index: usize,
+    identifier_path: Option<&Path>,
+) {
+    let current = &paths.chapters[chapter_index];
+    output.push_str("<nav class=\"book-navigation\" aria-label=\"Book navigation\">\n");
+    if let Some(previous) = chapter_index.checked_sub(1) {
+        render_navigation_link(
+            output,
+            current,
+            &program.chapters[previous],
+            &paths.chapters[previous],
+            "prev",
+            "Previous: ",
+        );
+    }
+    if let Some(identifier_path) = identifier_path {
+        output.push_str("<span class=\"book-navigation-indexes\">\n");
+        render_contents_navigation_link(output, current, &paths.contents);
+        output.push_str("<a class=\"identifier-index-link\" href=\"");
+        push_escaped_attribute(output, &relative_url(current, identifier_path));
+        output.push_str("\">Identifier Index</a>\n</span>\n");
+    } else {
+        render_contents_navigation_link(output, current, &paths.contents);
+    }
+    if let Some(next) = program.chapters.get(chapter_index + 1) {
+        render_navigation_link(
+            output,
+            current,
+            next,
+            &paths.chapters[chapter_index + 1],
+            "next",
+            "Next: ",
+        );
+    }
+    output.push_str("</nav>\n");
+}
+
+fn render_contents_navigation_link(
+    output: &mut String,
+    current: &Path,
+    contents_path: &Path,
+) {
+    output.push_str("<a class=\"contents\" href=\"");
+    push_escaped_attribute(output, &relative_url(current, contents_path));
+    output.push_str("\">Contents</a>\n");
+}
+
+fn render_navigation_link(
+    output: &mut String,
+    current: &Path,
+    chapter: &Chapter,
+    chapter_path: &Path,
+    relation: &str,
+    prefix: &str,
+) {
+    let metadata = chapter
+        .book
+        .as_ref()
+        .expect("a loaded book chapter has book metadata");
+    output.push_str("<a rel=\"");
+    push_escaped_attribute(output, relation);
+    output.push_str("\" href=\"");
+    push_escaped_attribute(output, &relative_url(current, chapter_path));
+    output.push_str("\">");
+    push_escaped_text(output, prefix);
+    push_escaped_text(output, &metadata.navigation_label);
+    output.push_str("</a>\n");
+}
+---
+
+@s One Relationship Across Two Pages
+
+Consider a small book whose first two pages have this layout:
+
+```text
+chapters/first.html
+|-- section 1  Shared base
+|-- section 2  Shared addition
+`-- section 3  First only definition
+
+chapters/middle.html
+`-- section 1  Cross-page uses, containing @{First only}
+```
+
+The middle chapter's whole-line use links to the definition in presentation
+section 3 of the first chapter.
+
+Four similar-looking values have different jobs:
+
+- the target filesystem path is `chapters/first.html`;
+- from `chapters/middle.html`, the relative page URL is `first.html`;
+- the target anchor is `#1:3`; and
+- the visible label is `1.3`, meaning chapter 1, presentation section 3.
+
+The finished link is therefore
+`href="first.html#1:3"` with visible text `1.3`. A relationship within the
+middle page would need only a fragment such as `#2:1` and would display the
+local section number `1`.
+
+`SectionLocation` supplies the anchor and visible label. The function below
+supplies only the relative page URL. Keeping those values separate prevents a
+filesystem separator or an HTML escape from accidentally becoming part of a
+reader-facing section number.
+
+@s Building a Relative Page URL
+
+The current and target paths are divided into portable components. Their
+shared directory prefix is removed. One `..` is added for each remaining
+current-page directory, and the remaining target components are joined with
+URL slashes.
+
+For the two pages above, the shared `chapters` component disappears and the
+result is simply `first.html`. The same operation works when pages occupy
+different directory depths.
+
+--- Build a relative page URL
+fn relative_url(from_page: &Path, to_page: &Path) -> String {
+    let from = path_components(from_page.parent().unwrap_or_else(|| Path::new("")));
+    let to = path_components(to_page);
+    let mut common = 0;
+    while common < from.len() && common < to.len() && from[common] == to[common] {
+        common += 1;
+    }
+
+    let mut components = Vec::new();
+    components.extend(std::iter::repeat_n("..".to_owned(), from.len() - common));
+    components.extend(
+        to[common..]
+            .iter()
+            .map(|component| encode_url_component(component)),
+    );
+    if components.is_empty() {
+        ".".to_owned()
+    } else {
+        components.join("/")
+    }
+}
+
+fn path_components(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(component) => {
+                Some(component.to_string_lossy().into_owned())
+            }
+            Component::CurDir => None,
+            Component::ParentDir => Some("..".to_owned()),
+            Component::RootDir | Component::Prefix(_) => None,
+        })
+        .collect()
+}
+---
+
+@s Percent-Encoding a URL Component
+
+Filesystem paths retain ordinary Unicode names, while URLs must protect
+spaces and non-ASCII bytes. In a second exact case, `other/two.html` links to
+filesystem path `nested space/é.html`. The relative URL is
+`../nested%20space/%C3%A9.html`; adding anchor `#1:1` gives the complete
+relationship target, whose visible label is `1.1`.
+
+Unreserved ASCII bytes pass through unchanged. Every other UTF-8 byte becomes
+an uppercase `%HH` escape, so filename text never controls URL structure.
+The finished URL is still passed through attribute escaping when inserted
+into HTML; percent encoding and HTML escaping solve different problems.
+
+--- Percent-encode a URL component
+
+fn encode_url_component(component: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::new();
+    for byte in component.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+---
+
+@s Rendering a Book Identifier Index
+
+Now extend the four-page result with Rust identifiers. In a small indexed
+book, `shared_name` occurs in two chapters, so its
+`index-identifiers.html` page includes this entry:
+
+```text
+shared_name
+|-- 1. Definitions    section 1 definition, section 2 use
+`-- 2. Uses & More    section 1 use
+```
+
+Identifier reported several source occurrences in those sections. Woven
+Document has already collapsed occurrences that share a presentation
+location, just as it did for `Graph`. The book renderer now groups the
+remaining locations by chapter in manifest order.
+
+Each group first links the displayed chapter number and navigation label to
+the chapter page, then links chapter-local presentation numbers. A definition
+link remains underlined, and its accessible label names both chapter and
+section. The entry order around `shared_name` remains alphabetical.
+
+--- Render a book identifier index
+fn render_book_identifier_index(
+    program: &Program,
+    paths: &BookHtmlPaths,
+    index: &LocatedIdentifierIndex,
+    current_path: &Path,
+) -> String {
+    let mut output = String::new();
+    let document_title = format!("Identifier Index — {}", program.title);
+    render_book_head(
+        &mut output,
+        &document_title,
+        BookPageStyle::IdentifierIndex,
+        current_path,
+        false,
+        None,
+    );
+    output.push_str("<h1 id=\"identifier-index-title\">Identifier Index</h1>\n");
+    output.push_str("<p class=\"identifier-index-book-title\">");
+    push_escaped_text(&mut output, &program.title);
+    output.push_str("</p>\n");
+    render_identifier_index_navigation(&mut output, paths, current_path);
+    output.push_str(
+        "<section class=\"identifier-index book-identifier-index\" \
+         aria-labelledby=\"identifier-entries-title\">\n\
+         <h2 id=\"identifier-entries-title\" class=\"visually-hidden\">\
+         Identifier entries</h2>\n<dl>\n",
+    );
+
+    for entry in &index.entries {
+        output.push_str("<dt><code>");
+        push_escaped_text(&mut output, &entry.name);
+        output.push_str("</code></dt>\n<dd>\n");
+        for (chapter_index, chapter) in program.chapters.iter().enumerate() {
+            let locations = entry
+                .locations
+                .iter()
+                .filter(|occurrence| occurrence.location.chapter == chapter_index)
+                .collect::<Vec<_>>();
+            if locations.is_empty() {
+                continue;
+            }
+            render_identifier_chapter_group(
+                &mut output,
+                chapter,
+                &paths.chapters[chapter_index],
+                &locations,
+                current_path,
+            );
+        }
+        output.push_str("</dd>\n");
+    }
+
+    output.push_str("</dl>\n</section>\n");
+    render_identifier_index_navigation(&mut output, paths, current_path);
+    output.push_str("</main>\n</body>\n</html>\n");
+    output
+}
+
+fn render_identifier_chapter_group(
+    output: &mut String,
+    chapter: &Chapter,
+    chapter_path: &Path,
+    locations: &[&LocatedIdentifierLocation],
+    current_path: &Path,
+) {
+    let metadata = chapter
+        .book
+        .as_ref()
+        .expect("a loaded book chapter has book metadata");
+    output.push_str(
+        "<div class=\"identifier-chapter-group\"><a class=\"identifier-chapter\" href=\"",
+    );
+    push_escaped_attribute(output, &relative_url(current_path, chapter_path));
+    output.push_str("\">");
+    push_escaped_text(output, &chapter.number());
+    output.push_str(". ");
+    push_escaped_text(output, &metadata.navigation_label);
+    output.push_str("</a>: ");
+
+    for (position, occurrence) in locations.iter().enumerate() {
+        if position > 0 {
+            output.push_str(", ");
+        }
+        let location = &occurrence.location;
+        output.push_str("<a");
+        if occurrence.role == IdentifierRole::Definition {
+            output.push_str(" class=\"identifier-definition\"");
+        }
+        output.push_str(" href=\"");
+        push_escaped_attribute(output, &relative_url(current_path, chapter_path));
+        output.push('#');
+        push_escaped_attribute(output, &location.anchor());
+        output.push_str("\" aria-label=\"");
+        if occurrence.role == IdentifierRole::Definition {
+            output.push_str("definition in ");
+        }
+        output.push_str("chapter ");
+        push_escaped_attribute(output, &chapter.number());
+        output.push_str(", section ");
+        let section = location.section.to_string();
+        push_escaped_attribute(output, &section);
+        output.push_str("\">");
+        push_escaped_text(output, &section);
+        output.push_str("</a>");
+    }
+    output.push_str("</div>\n");
+}
+
+fn render_identifier_index_navigation(
+    output: &mut String,
+    paths: &BookHtmlPaths,
+    current_path: &Path,
+) {
+    output.push_str("<nav class=\"book-navigation\" aria-label=\"Book navigation\">\n");
+    render_contents_navigation_link(output, current_path, &paths.contents);
+    output.push_str("</nav>\n");
+}
+---
+
+@s Linking Contents to the Identifier Index
+
+The index is not a chapter, so it does not enter the numbered contents list.
+A separate navigation landmark on the contents page links to it. Chapter
+navigation adds the same destination beside `Contents`, using the relative
+URL appropriate for each chapter directory. The identifier page itself links
+back to the contents page.
+
+--- Render the contents identifier-index link
+fn render_contents_index_link(
+    output: &mut String,
+    contents_path: &Path,
+    index_path: &Path,
+) {
+    output.push_str(
+        "<nav class=\"book-index-navigation\" aria-label=\"Book indexes\">\n<a href=\"",
+    );
+    push_escaped_attribute(output, &relative_url(contents_path, index_path));
+    output.push_str("\">Identifier Index</a>\n</nav>\n");
+}
+---
+
+@s Choosing the Book Identifier-Index Path
+
+Only a nonempty located identifier index requests this page. `Greetings`
+therefore returned `None` before reserving any path. `--no-index` has the same
+result.
+
+For an indexed book, the page sits beside the contents page under the fixed
+name `index-identifiers.html`. If the contents or a chapter already uses that
+path, Weaver reports a collision instead of proposing two different files at
+one destination. The check belongs here because the conflict arises from
+Weaver's optional page, before Output examines the combined tangle and weave
+plans.
+
+--- Choose the book identifier-index path
+fn book_identifier_index_path(
+    program: &Program,
+    paths: &BookHtmlPaths,
+    identifiers: &LocatedIdentifierIndex,
+    errors: &mut Vec<WeaveError>,
+) -> Option<PathBuf> {
+    if identifiers.entries.is_empty() {
+        return None;
+    }
+
+    let path = paths.contents.with_file_name("index-identifiers.html");
+    let collision = if path == paths.contents {
+        Some(program.origin.clone())
+    } else {
+        program.chapters.iter().zip(&paths.chapters).find_map(
+            |(chapter, chapter_path)| {
+                let metadata = chapter
+                    .book
+                    .as_ref()
+                    .expect("a loaded book chapter has book metadata");
+                (*chapter_path == path).then(|| metadata.label_origin.clone())
+            },
+        )
+    };
+    if let Some(origin) = collision {
+        errors.push(WeaveError {
+            origin,
+            kind: WeaveErrorKind::IdentifierIndexPathCollision { path },
+        });
+        None
+    } else {
+        Some(path)
+    }
+}
+---
+
+@s The Book Pages Ready for Presentation
+
+Book Weaving now returns an ordered group of complete page strings to the
+outer planner. `Greetings` contributes its contents page and three chapter
+pages. A cross-chapter relationship keeps filesystem paths, relative URLs,
+anchors, and visible labels distinct. A Rust book may append one identifier
+page, but an empty index appends nothing.
+
+Every page uses the same layout and resolved identities established by Woven
+Document. No page has been written to disk. Presentation next explains the
+shared HTML shell and any optional offline assets before the complete
+`WeavePlan` reaches Output.

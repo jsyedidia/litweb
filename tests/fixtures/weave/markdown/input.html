@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Markdown Weave</title>
+<style>
+body {
+    color: #222;
+    background: #fff;
+    font-family: Georgia, serif;
+    line-height: 1.5;
+    margin: 0;
+}
+main {
+    max-width: 56rem;
+    margin: 0 auto;
+    padding: clamp(0.75rem, 4vw, 2rem);
+}
+.section {
+    margin: 2.5rem 0;
+}
+.section-heading {
+    font-size: 1rem;
+    margin: 0 0 1rem;
+}
+.section-opening > .section-heading,
+.section-opening > p,
+.section-opening > .codeblock_name {
+    display: inline;
+    margin: 0;
+}
+.section-number,
+.chapter-number,
+.definition-operator {
+    white-space: nowrap;
+}
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.codeblock {
+    margin: 1.25rem 0;
+}
+.codeblock-first {
+    margin-top: 0;
+}
+.codeblock_name {
+    margin-left: min(1rem, 3vw);
+    font-family: monospace;
+    overflow-wrap: anywhere;
+}
+.section-opening > .codeblock_name {
+    margin-left: 0;
+}
+.definition-operator {
+    font-family: Georgia, serif;
+}
+code {
+    white-space: pre-wrap;
+}
+pre code {
+    white-space: inherit;
+}
+pre {
+    overflow-x: auto;
+    border: 1px solid #d8d8d8;
+    background: #f7f7f7;
+    padding: 0.8rem 1rem;
+    line-height: 1.35;
+}
+.table-scroll {
+    overflow-x: auto;
+    margin: 1.25rem 0;
+}
+.table-scroll table {
+    border-collapse: collapse;
+    width: max-content;
+    min-width: 100%;
+}
+.table-scroll th,
+.table-scroll td {
+    border: 1px solid #d8d8d8;
+    padding: 0.45rem 0.7rem;
+    vertical-align: top;
+}
+.table-scroll th {
+    background: #f7f7f7;
+}
+.table-align-left {
+    text-align: left;
+}
+.table-align-center {
+    text-align: center;
+}
+.table-align-right {
+    text-align: right;
+}
+.nocode {
+    color: #555;
+    font-style: italic;
+}
+.seealso {
+    margin: 0.2rem 0 0 min(1rem, 3vw);
+    font-size: 0.9rem;
+    color: #555;
+}
+.section-name a,
+.section-reference a,
+.nocode a,
+.seealso a {
+    text-decoration: none;
+}
+.section-name a:focus-visible,
+.section-reference a:focus-visible,
+.nocode a:focus-visible,
+.seealso a:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+a {
+    color: #245b8a;
+}
+</style>
+</head>
+<body>
+<main>
+<h1>Markdown Weave</h1>
+<section class="section" id="1:1">
+<div class="section-opening">
+<h2 class="section-heading"><span class="section-number">1.</span> <span class="section-title">Markdown</span>.</h2>
+<p>This paragraph has <strong>bold text</strong>, <em>emphasis</em>, <code>inline code</code>, and a link to
+the <code class="section-reference">⟨Snippet <a href="#1:2" aria-label="section 2">2</a>⟩</code> code block. It also has <a href="https://example.com">a safe link</a>.</p>
+</div>
+<ul>
+<li>alpha wraps with <em>emphasis</em>
+on the next source line.</li>
+<li>beta</li>
+</ul>
+<ol start="3">
+<li>third
+continues with <code>code</code>.</li>
+<li>fourth</li>
+</ol>
+<pre><code>&lt;fixed &amp; literal&gt;
+@{not a reference}
+</code></pre>
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th scope="col" class="table-align-left">Form</th>
+<th scope="col" class="table-align-center">Meaning</th>
+<th scope="col" class="table-align-right">Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="table-align-left"><code>-</code></td>
+<td class="table-align-center"><em>unordered</em></td>
+<td class="table-align-right">2</td>
+</tr>
+<tr>
+<td class="table-align-left"><code>N.</code></td>
+<td class="table-align-center"><a href="guide.html">ordered</a></td>
+<td class="table-align-right">3</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="codeblock">
+<div class="codeblock_name"><span class="section-name">⟨<strong>markdown.txt</strong> <a href="#1:1" aria-label="section 1">1</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+<pre><code><span class="nocode">⟨Snippet <a href="#1:2" aria-label="section 2">2</a>⟩</span>
+</code></pre>
+</div>
+</section>
+<section class="section" id="1:2">
+<div class="codeblock codeblock-first">
+<div class="section-opening">
+<h2 class="section-heading section-heading-untitled"><span class="section-number">2.</span> <span class="visually-hidden">Untitled section</span></h2>
+<div class="codeblock_name"><span class="section-name">⟨Snippet <a href="#1:2" aria-label="section 2">2</a>⟩</span> <span class="definition-operator" aria-label="is defined as">≡</span></div>
+</div>
+<pre><code>rendered &lt;once&gt;
+</code></pre>
+<p class="seealso">This code is used in section <a href="#1:1" aria-label="section 1">1</a>.</p>
+</div>
+</section>
+</main>
+</body>
+</html>

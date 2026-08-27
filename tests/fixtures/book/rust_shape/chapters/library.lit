@@ -1,0 +1,17 @@
+@title Library Internals
+
+@s Library root
+
+--- src/lib.rs
+@{Shared prelude}
+@{Local variables}
+pub fn library() -> &'static str { LOCAL }
+---
+
+--- Shared prelude
+use std::fmt;
+---
+
+--- Local variables
+const LOCAL: &str = "library";
+---

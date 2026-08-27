@@ -1,0 +1,20 @@
+@title Nested Expansion
+@comment_type # %s
+
+@s Nested expansion
+
+The root block expands two nested named blocks with accumulated indentation.
+
+--- nested.py
+def main():
+    @{Outer body}
+---
+
+--- Outer body
+if ready:
+    @{Inner body}
+---
+
+--- Inner body
+print("nested")
+---

@@ -1,0 +1,2 @@
+[alias]
+lw = "run --release --bin lw --"

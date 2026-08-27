@@ -1,0 +1,40 @@
+@title Parser Fixture
+@code_type rust .rs
+@comment_type // %s
+
+@s First section
+
+This prose keeps @{Piece} and an @unknown directive.
+// This comment is discarded outside code.
+
+--- output.rs
+fn main() {
+    // This comment is code and must be preserved.
+}
+---
+
+Prose after the first block.
+
+--- "Makefile" --- noWeave noHeader
+all:
+	echo parser
+---
+
+--- Piece
+one
+---
+
+--- Piece +=
+two
+---
+
+--- Piece --- :=
+three
+---
+
+@s Second section
+@comment_type # %s
+
+--- Another ---
+four
+---

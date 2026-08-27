@@ -1,0 +1,828 @@
+@code_type rust .rs
+@comment_type // %s
+
+@title Woven Document
+
+@s One Source, Two Woven Formats
+
+The HTML and LaTeX paths will both use this small document:
+
+````text
+@code_type rust .rs
+@comment_type // %s
+@title Distance
+
+@s Squared Distance
+The formula $d^2 = x^2 + y^2$ gives the squared distance.
+The implementation is in @{distance.rs}.
+
+--- distance.rs
+fn squared_distance(x: f64, y: f64) -> f64 {
+    x * x + y * y
+}
+---
+````
+
+Parser records one semantic section containing a prose occurrence and a code
+occurrence. Prose recognizes the sentence as text, an inline equation, more
+text, and a named-block reference. Resolver decides that the reference and
+the code definition name the same block. Those are source facts, but neither
+HTML nor LaTeX syntax has been chosen yet.
+
+Litweb next prepares the meaning that every woven output must preserve:
+
+```text
+presentation section 1, "Squared Distance"
+|-- paragraph
+|   |-- equation                 d^2 = x^2 + y^2
+|   `-- reference                distance.rs -> section 1
+`-- root code definition         distance.rs
+```
+
+A **backend** is one supported kind of woven output, such as HTML or LaTeX. A
+**renderer** is the part of a backend that writes its particular syntax. The
+**prepared woven document** is the source content together with shared
+presentation sections, named-block relationships, and identifier locations.
+It is a useful name for these cooperating values, not one additional parsed
+file or public Rust type.
+
+Both renderers receive the facts above. HTML can represent the equation with
+a marked `span` and the reference with a link to `#1:1`. LaTeX can write the
+equation as `\(d^2 = x^2 + y^2\)` and link the same visible section number
+to a safe anchor such as `litweb-1-1`. The surrounding syntax differs; the
+section division, equation source, block identity, and destination do not.
+
+An **output context** is the exact place where a renderer is about to put
+authored text: a title, ordinary prose, code, a link target, or mathematics,
+for example. Each renderer later escapes text for that context. Context belongs
+to the output format, while the prepared meaning belongs to both.
+
+@s The Shared Module
+
+This private module owns the common locations and relationships. HTML and
+LaTeX import them instead of deriving separate answers.
+
+--- src/woven.rs
+//! Presentation sections and relationships shared by output backends.
+
+use std::collections::{HashMap, HashSet};
+
+use crate::identifier::{IdentifierIndex, IdentifierKind, IdentifierRole};
+use crate::parser::{BlockKind, Modifier, Program, SourceOrigin};
+use crate::resolver::{BlockLookup, ResolvedProgram};
+use crate::util::block_reference;
+
+@{Presentation section locations}
+@{Presentation sections}
+@{Weave layout model}
+@{Weave layout implementation}
+@{Woven relationship index model}
+@{Located identifier index}
+@{Located mini-index meanings}
+@{Collect weave locations}
+---
+
+@s Three Views of the Source
+
+Preparing a woven document combines three views that answer different
+questions:
+
+```text
+Program
+|-- authored prose and code occurrences
+`-- their physical source locations
+
+ResolvedProgram
+|-- one stable identity for each named definition
+|-- final name lookup
+`-- output roots
+
+IdentifierIndex
+|-- spellings at parser coordinates for a final index
+`-- declaration meanings and their associated occurrences
+```
+
+The presentation layout comes from `Program`, because both renderers display
+authored occurrences. Named-block relationships combine that layout with
+`ResolvedProgram`, because a base, its changes, and its uses must meet at one
+definition identity. Target-language links combine the layout with
+`IdentifierIndex`.
+
+Prose has already grouped source lines into paragraphs, lists, fences, tables,
+and equations and has recognized their inline elements. Preparation keeps that
+content and adds reader-facing locations; it does not parse the prose a second
+time.
+
+@s A Larger Relationship Example
+
+The one-section `Distance` document established the shared boundary. A richer
+example shows why preparation must finish before either renderer starts
+writing. Resolver and Tangler followed this program as its changes turned
+`Greeting line` into the final contents of `hello.txt`:
+
+```text
+@title A Greeting
+@s Greeting
+This small program writes one line.
+
+--- hello.txt
+@{Greeting line}
+---
+
+The text comes from a separate named piece.
+
+--- Greeting line
+Hello
+---
+
+--- Greeting line +=
+from Litweb
+---
+
+--- Greeting line :=
+Good morning
+---
+
+--- Greeting line +=
+from Litweb
+---
+```
+
+Tangler needs only the final definition: `Good morning` followed by
+`from Litweb`. A woven document instead keeps every authored occurrence so a
+reader can see how the program was assembled. The one semantic section
+beginning at `@s Greeting` becomes five numbered presentation sections:
+
+```text
+1  "Greeting"
+   prose and the hello.txt root, which uses Greeting line
+2  prose and the base Greeting line definition
+3  the first addition
+4  the replacement
+5  the final addition
+```
+
+The root in section 1 refers to `⟨Greeting line 2⟩`. The relationship facts
+say that sections 3 and 5 add to the base, section 4 replaces it, and section
+1 uses it. Since those links can point forward, preparation derives every
+location before an HTML or LaTeX renderer writes its first section.
+
+@s One Location System for Every Link
+
+The layout and both indexes share one location system. That agreement is what
+lets a heading, a named-block relationship, and an identifier entry all point
+to the same numbered section.
+
+@s Deriving the Five Reading Sections
+
+Parser creates one semantic `Section` when it sees `@s Greeting`. That section
+controls command scope and owns every prose and code occurrence in the
+example. It is not yet the five-part outline a reader sees.
+
+The layout starts with an empty presentation section. The opening prose fills
+its prose slot, and the `hello.txt` root fills its code slot, giving section 1.
+The next prose cannot follow an occupied code slot, so it begins section 2;
+the base `Greeting line` block shares that section. Each later code
+occurrence finds the current code slot occupied and therefore starts sections
+3, 4, and 5.
+
+That walk gives the general rules:
+
+- prose followed by code shares one presentation section;
+- code followed by prose produces two;
+- prose followed by two code blocks produces two;
+- a `noWeave` code occurrence occupies no visible slot;
+- a blank prose block occupies no prose slot; and
+- an explicitly empty `@s` still produces one empty presentation section.
+
+Only section 1 carries the semantic title `Greeting`. The other four are
+untitled continuations, not new command scopes. Their presentation numbers
+are stable reading locations; they are neither physical source-line numbers
+nor Parser's semantic-section number.
+
+@s Naming a Reading Location
+
+`SectionLocation` records three facts: which chapter owns a location, the
+chapter number printed for readers, and the chapter-local presentation
+number. In the one-file example, the base block's location produces anchor
+`1:2` and local label `2`. In a book, the same value can also produce a
+cross-chapter label such as `2.4`.
+
+`WeaveLayout.chapters` stores the five derived sections.
+`block_locations` is a parallel lookup table shaped like the parsed
+`chapter → semantic section → block occurrence` hierarchy. The root occurrence
+maps to section 1, the base to section 2, and the three changes to sections 3,
+4, and 5. Blank prose and `noWeave` code map to `None`.
+
+Every later index asks this one table where an occurrence became visible.
+Named-block links and identifier links therefore cannot invent different
+split points.
+
+--- Presentation section locations
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SectionLocation {
+    pub chapter: usize,
+    pub chapter_number: String,
+    pub section: usize,
+}
+
+impl SectionLocation {
+    pub fn anchor(&self) -> String {
+        format!("{}:{}", self.chapter_number, self.section)
+    }
+
+    pub fn label(&self, current_chapter: Option<usize>) -> String {
+        if Some(self.chapter) == current_chapter {
+            self.section.to_string()
+        } else {
+            format!("{}.{}", self.chapter_number, self.section)
+        }
+    }
+}
+---
+
+@s What One Presentation Section Records
+
+A `WeaveSection` points back to the semantic section that owns it and selects
+at most one prose occurrence and one code occurrence. For example, section 2
+selects the second prose occurrence and the base code occurrence from the
+single `Greeting` section. Its location contains presentation number 2.
+
+`source_section_start` is false for that continuation. It is true only for
+section 1, which is why `Greeting` appears once instead of above every change.
+
+--- Presentation sections
+
+#[derive(Debug)]
+pub(crate) struct WeaveSection {
+    pub source_section: usize,
+    pub source_section_start: bool,
+    pub prose: Option<usize>,
+    pub code: Option<usize>,
+    pub location: SectionLocation,
+}
+
+impl WeaveSection {
+    fn new(
+        chapter: usize,
+        chapter_number: &str,
+        source_section: usize,
+        source_section_start: bool,
+        number: usize,
+    ) -> Self {
+        Self {
+            source_section,
+            source_section_start,
+            prose: None,
+            code: None,
+            location: SectionLocation {
+                chapter,
+                chapter_number: chapter_number.to_owned(),
+                section: number,
+            },
+        }
+    }
+}
+---
+
+@s The Complete Layout
+
+The complete layout owns both representations: reader-facing presentation
+sections and the occurrence-to-location lookup table. Keeping them together
+protects their agreement.
+
+--- Weave layout model
+
+#[derive(Debug)]
+pub(crate) struct WeaveLayout {
+    pub chapters: Vec<Vec<WeaveSection>>,
+    block_locations: Vec<Vec<Vec<Option<SectionLocation>>>>,
+}
+---
+
+@s The Two Layout Operations
+
+The layout has two operations. Construction derives all presentation
+sections; lookup answers where one parsed occurrence became visible.
+
+--- Weave layout implementation
+impl WeaveLayout {
+    @{Derive the weave layout}
+    @{Find a parsed block location}
+}
+---
+
+@s Walking the Parsed Occurrences
+
+Construction walks every parsed occurrence once. `current` is the
+presentation section being filled. When the next visible occurrence cannot
+fit, the algorithm saves `current` and starts the next numbered section.
+
+The location assigned to an occurrence is cloned into `block_locations` at
+the same moment, so the two representations cannot drift apart. Every
+semantic section contributes at least its initial presentation section, even
+when an explicit `@s` is otherwise empty.
+
+--- Derive the weave layout
+
+pub fn new(program: &Program) -> Self {
+    let mut chapters = Vec::with_capacity(program.chapters.len());
+    let mut block_locations = Vec::with_capacity(program.chapters.len());
+
+    for (chapter_index, chapter) in program.chapters.iter().enumerate() {
+        let mut sections = Vec::new();
+        let mut chapter_locations = Vec::with_capacity(chapter.sections.len());
+        let chapter_number = chapter.number();
+
+        for (source_section_index, source_section) in
+            chapter.sections.iter().enumerate()
+        {
+            let mut locations = vec![None; source_section.blocks.len()];
+            let mut current = WeaveSection::new(
+                chapter_index,
+                &chapter_number,
+                source_section_index,
+                true,
+                sections.len() + 1,
+            );
+
+            for (block_index, block) in source_section.blocks.iter().enumerate() {
+                match &block.kind {
+                    BlockKind::Prose => {
+                        if !block
+                            .lines
+                            .iter()
+                            .any(|line| !line.text.trim().is_empty())
+                        {
+                            continue;
+                        }
+                        if current.prose.is_some() || current.code.is_some() {
+                            sections.push(current);
+                            current = WeaveSection::new(
+                                chapter_index,
+                                &chapter_number,
+                                source_section_index,
+                                false,
+                                sections.len() + 1,
+                            );
+                        }
+                        current.prose = Some(block_index);
+                        locations[block_index] = Some(current.location.clone());
+                    }
+                    BlockKind::Code(code) => {
+                        if code.modifiers.contains(&Modifier::NoWeave) {
+                            continue;
+                        }
+                        if current.code.is_some() {
+                            sections.push(current);
+                            current = WeaveSection::new(
+                                chapter_index,
+                                &chapter_number,
+                                source_section_index,
+                                false,
+                                sections.len() + 1,
+                            );
+                        }
+                        current.code = Some(block_index);
+                        locations[block_index] = Some(current.location.clone());
+                    }
+                }
+            }
+
+            sections.push(current);
+            chapter_locations.push(locations);
+        }
+
+        chapters.push(sections);
+        block_locations.push(chapter_locations);
+    }
+
+    Self {
+        chapters,
+        block_locations,
+    }
+}
+---
+
+@s Looking Up One Occurrence
+
+Later indexing and rendering provide Parser's chapter, semantic-section, and
+block coordinates. The parallel table returns the one presentation location
+assigned during construction. A blank prose or `noWeave` occurrence returns
+`None` because it has no visible target.
+
+--- Find a parsed block location
+
+pub fn block_location(
+    &self,
+    chapter: usize,
+    source_section: usize,
+    block: usize,
+) -> Option<&SectionLocation> {
+    self.block_locations[chapter][source_section][block].as_ref()
+}
+---
+
+@s Indexing Definitions, Changes, and Uses
+
+Resolver assigns the base `Greeting line` definition and all three changes
+one stable identity, `blocks[1]`. The shared relationship entry for that
+identity is exact:
+
+```text
+definition       section 2
+additions        sections 3 and 5
+replacement      section 4
+uses             section 1
+```
+
+The entry uses separate fields because the page gives each relationship
+different wording. In Rust, replacements retain the older field name
+`redefinitions`.
+
+Several authored occurrences contribute to this one entry. Each first obtains
+its presentation location from `WeaveLayout`; Resolver's lookup then selects
+the stable definition identity. Repeated relationships in one presentation
+section collapse without changing source order.
+
+A hidden base definition records `definition_hidden` instead of inventing an
+HTML target. Visible prose or code references then remain unlinked `⟨Name⟩`
+text. Whole-line uses are recognized by the same helper Tangler uses, so
+displayed and expanded references obey one grammar.
+
+--- Woven relationship index model
+#[derive(Debug, Default)]
+pub(crate) struct BlockLocations {
+    pub definition: Option<SectionLocation>,
+    pub definition_hidden: bool,
+    pub additions: Vec<SectionLocation>,
+    pub redefinitions: Vec<SectionLocation>,
+    pub uses: Vec<SectionLocation>,
+}
+
+pub(crate) struct WeaveIndex {
+    pub blocks: HashMap<usize, BlockLocations>,
+    pub roots: HashSet<usize>,
+}
+---
+
+@s Target-Language Identifier Locations
+
+The named-block relationship index answers questions about `Greeting line`.
+The target-language identifier index answers separate questions about names
+such as the Rust type `Graph`.
+
+Identifier ended with this exact `Notes` section:
+
+````text
+@code_type rust .rs
+@s Notes
+Call @code{parse_str()} before continuing.
+
+```text
+@s Not a section
+--- Not a block
+@code{not_rust()}
+```
+
+Name | Example
+--- | ---
+type | @code{Graph}
+
+--- graph.rs
+struct Graph {
+    vertex_count: usize,
+}
+
+fn make_graph(initial_count: usize) -> Graph {
+    let graph = Graph {
+        vertex_count: initial_count,
+    };
+    graph
+}
+---
+````
+
+Identifier reports four `Graph` occurrences at Parser coordinates: the prose
+use, the struct definition, the return-type use, and the struct-expression
+use.
+
+The layout puts the prose occurrence and following `graph.rs` block in one
+presentation section. All four source occurrences therefore map through the
+layout to the same location. The first use creates that location, the
+definition upgrades its role, and the remaining uses do not duplicate or
+downgrade it. The displayed identifier index contains one underlined
+definition link for `Graph`. This spelling-oriented result is suitable for the
+final index, which asks where a name occurs throughout the document.
+
+--- Located identifier index
+#[derive(Default)]
+pub(crate) struct LocatedIdentifierIndex {
+    pub entries: Vec<LocatedIdentifierEntry>,
+}
+
+pub(crate) struct LocatedIdentifierEntry {
+    pub name: String,
+    pub locations: Vec<LocatedIdentifierLocation>,
+}
+
+pub(crate) struct LocatedIdentifierLocation {
+    pub location: SectionLocation,
+    pub role: IdentifierRole,
+}
+
+pub(crate) fn locate_identifiers(
+    source: &IdentifierIndex,
+    layout: &WeaveLayout,
+) -> LocatedIdentifierIndex {
+    let mut entries = Vec::new();
+    for entry in source.entries() {
+        let mut locations: Vec<LocatedIdentifierLocation> = Vec::new();
+        for occurrence in &entry.occurrences {
+            let Some(location) = layout.block_location(
+                occurrence.site.chapter,
+                occurrence.site.section,
+                occurrence.site.block,
+            ) else {
+                continue;
+            };
+            if let Some(existing) = locations
+                .iter_mut()
+                .find(|existing| existing.location == *location)
+            {
+                if occurrence.role == IdentifierRole::Definition {
+                    existing.role = IdentifierRole::Definition;
+                }
+            } else {
+                locations.push(LocatedIdentifierLocation {
+                    location: location.clone(),
+                    role: occurrence.role,
+                });
+            }
+        }
+        if !locations.is_empty() {
+            entries.push(LocatedIdentifierEntry {
+                name: entry.name.clone(),
+                locations,
+            });
+        }
+    }
+    LocatedIdentifierIndex { entries }
+}
+---
+
+@s Preparing Meanings for Physical Pages
+
+The mini-index follows the definition-oriented view. Continue Identifier's
+example: section 4 on an earlier spread defines `struct Graph`; the current
+left and right pages use `Graph` as a return type and parameter type. The
+desired reminder is `Graph: struct, 4.` If section 4 moves onto either current
+page, that reminder must disappear.
+
+Woven Document cannot make that decision yet. A **presentation section** is a
+logical reading location, not a physical page. A short section may share a
+page with several neighbors, while a long code section may cross a page
+boundary. Font metrics and the mini-index itself can also move material to the
+next page. Assigning every occurrence in section 12 to one predicted page
+would therefore be wrong.
+
+Instead, this stage prepares exact notes for the LaTeX renderer. Each meaning
+receives a small positive **page marker**, an internal number that identifies
+the meaning. Marker 1 might stand for the complete printable entry
+`Graph: struct, 4.` The number is not a section number and will not be visible
+in the PDF. The definition already has its linked presentation location.
+
+Each associated definition or use retains its @code{SourceOrigin} and original
+column. Together they identify the precise token that should carry the
+invisible marker, even when one source line contains several identifiers.
+Meanings are sorted before marker numbers are assigned, so the result is
+deterministic. Occurrences on hidden presentation blocks are omitted because
+no renderer can put a marker beside invisible text.
+
+The resulting @code{LocatedMiniIndex} still contains no page numbers. It says
+what each marker means and where every marker belongs in visible source. LaTeX
+will insert the notes, and its page composer will decide which of them
+actually land on the same spread. HTML uses the spelling-oriented locations
+above and needs no mini-index markers.
+
+--- Located mini-index meanings
+#[derive(Default)]
+pub(crate) struct LocatedMiniIndex {
+    pub meanings: Vec<LocatedMiniMeaning>,
+    pub occurrences: HashMap<SourceOrigin, Vec<LocatedMiniOccurrence>>,
+}
+
+pub(crate) struct LocatedMiniMeaning {
+    pub marker: usize,
+    pub name: String,
+    pub kind: IdentifierKind,
+    pub definition: SectionLocation,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct LocatedMiniOccurrence {
+    pub marker: usize,
+    pub role: IdentifierRole,
+    pub column: usize,
+}
+
+pub(crate) fn locate_mini_identifiers(
+    source: &IdentifierIndex,
+    layout: &WeaveLayout,
+) -> LocatedMiniIndex {
+    let mut selected = source
+        .meanings()
+        .iter()
+        .filter_map(|meaning| {
+            layout
+                .block_location(
+                    meaning.definition.chapter,
+                    meaning.definition.section,
+                    meaning.definition.block,
+                )
+                .cloned()
+                .map(|definition| (meaning, definition))
+        })
+        .collect::<Vec<_>>();
+    selected.sort_by(|(left, left_location), (right, right_location)| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left_location.chapter.cmp(&right_location.chapter))
+            .then_with(|| left_location.section.cmp(&right_location.section))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut source_to_marker = vec![None; source.meanings().len()];
+    let meanings = selected
+        .into_iter()
+        .enumerate()
+        .map(|(position, (meaning, definition))| {
+            let marker = position + 1;
+            source_to_marker[meaning.id] = Some(marker);
+            LocatedMiniMeaning {
+                marker,
+                name: meaning.name.clone(),
+                kind: meaning.kind,
+                definition,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut occurrences: HashMap<SourceOrigin, Vec<LocatedMiniOccurrence>> =
+        HashMap::new();
+    for occurrence in source.meaning_occurrences() {
+        let Some(marker) = source_to_marker[occurrence.meaning] else {
+            continue;
+        };
+        if layout
+            .block_location(
+                occurrence.site.chapter,
+                occurrence.site.section,
+                occurrence.site.block,
+            )
+            .is_none()
+        {
+            continue;
+        }
+        occurrences
+            .entry(occurrence.site.origin.clone())
+            .or_default()
+            .push(LocatedMiniOccurrence {
+                marker,
+                role: occurrence.role,
+                column: occurrence.column,
+            });
+    }
+    for located in occurrences.values_mut() {
+        located.sort_by_key(|occurrence| (occurrence.column, occurrence.marker));
+    }
+
+    LocatedMiniIndex {
+        meanings,
+        occurrences,
+    }
+}
+---
+
+@s Collecting Relationship Locations
+
+Collection begins with one empty entry for every resolved definition and a
+set of the identities that are output roots. It then walks authored code
+occurrences in source order. One step records whether the occurrence is a
+base, addition, or replacement; the other scans its lines for uses. A small
+helper keeps each location list unique without disturbing its first-seen
+order.
+
+--- Collect weave locations
+pub(crate) fn collect_locations(
+    program: &Program,
+    resolved: &ResolvedProgram,
+    layout: &WeaveLayout,
+) -> WeaveIndex {
+    let mut blocks = (0..resolved.blocks.len())
+        .map(|block| (block, BlockLocations::default()))
+        .collect::<HashMap<_, _>>();
+    let roots = resolved.roots.iter().map(|root| root.block).collect();
+
+    for (chapter_index, chapter) in program.chapters.iter().enumerate() {
+        for (section_index, section) in chapter.sections.iter().enumerate() {
+            for (block_index, block) in section.blocks.iter().enumerate() {
+                @{Index a code occurrence}
+                @{Index whole-line uses}
+            }
+        }
+    }
+
+    WeaveIndex { blocks, roots }
+}
+
+fn push_unique(locations: &mut Vec<SectionLocation>, location: SectionLocation) {
+    if !locations.contains(&location) {
+        locations.push(location);
+    }
+}
+---
+
+@s Indexing One Code Occurrence
+
+A code occurrence first resolves to the stable identity it affects. For the
+first addition to `Greeting line`, that is `blocks[1]`; its visible layout
+location is section 3. The `+=` modifier selects `additions`, while `:=`
+selects `redefinitions` and an unmodified base selects `definition`.
+`noWeave` records a hidden base but contributes no visible location.
+
+--- Index a code occurrence
+let Some(code) = block.code() else {
+    continue;
+};
+let BlockLookup::Found(identity) =
+    resolved.lookup(chapter_index, &code.name)
+else {
+    continue;
+};
+let locations = blocks.entry(identity).or_default();
+let hidden = code.modifiers.contains(&Modifier::NoWeave);
+if code.modifiers.contains(&Modifier::Additive) {
+    if let Some(location) =
+        layout.block_location(chapter_index, section_index, block_index)
+    {
+        push_unique(&mut locations.additions, location.clone());
+    }
+} else if code.modifiers.contains(&Modifier::Redefinition) {
+    if let Some(location) =
+        layout.block_location(chapter_index, section_index, block_index)
+    {
+        push_unique(&mut locations.redefinitions, location.clone());
+    }
+} else if hidden {
+    locations.definition_hidden = true;
+} else if let Some(location) =
+    layout.block_location(chapter_index, section_index, block_index)
+{
+    locations.definition = Some(location.clone());
+}
+---
+
+@s Indexing Whole-Line Uses
+
+The line inside the `hello.txt` root is a whole-line reference to
+`Greeting line`. Lookup finds `blocks[1]`, and the root occurrence's layout
+location records section 1 in that identity's `uses` list.
+
+Only a visible code occurrence can supply a visible use location. Undefined or
+ambiguous references have no target identity here; rendering diagnoses them
+when it reaches the visible line.
+
+--- Index whole-line uses
+let Some(location) =
+    layout.block_location(chapter_index, section_index, block_index)
+else {
+    continue;
+};
+for line in &block.lines {
+    if let Some(name) = block_reference(&line.text)
+        && let BlockLookup::Found(target) =
+            resolved.lookup(chapter_index, name)
+    {
+        push_unique(
+            &mut blocks.entry(target).or_default().uses,
+            location.clone(),
+        );
+    }
+}
+---
+
+@s One Meaning, Two Syntaxes
+
+Preparation has made all format-independent decisions. `Distance` showed one
+section whose equation, code reference, and definition have one shared
+meaning. `Greeting` extended the same model to five presentation sections,
+forward links, additions, a replacement, and a use. Identifier locations pass
+through the same occurrence-to-section lookup.
+
+The following chapters may now choose HTML pages or one LaTeX document without
+changing any of those answers. Their remaining responsibility is to express
+the prepared facts safely and readably in their own output syntax.

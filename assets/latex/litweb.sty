@@ -1,0 +1,493 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesFile{litweb.sty}[2026/08/03 Litweb woven-document style]
+
+\RequirePackage{amsmath}
+\RequirePackage{array}
+\RequirePackage{booktabs}
+\RequirePackage{fontspec}
+\RequirePackage{fvextra}
+\RequirePackage{geometry}
+\RequirePackage{hyperref}
+\RequirePackage{microtype}
+\RequirePackage{needspace}
+\RequirePackage{tabularx}
+\RequirePackage{xcolor}
+
+\setmainfont{Libertinus Serif}
+\setsansfont{Libertinus Sans}
+\setmonofont{DejaVu Sans Mono}[Scale=MatchLowercase]
+
+% CWEB's default page design uses a 6.5-by-8.7-inch text area. Retaining
+% those dimensions on letter paper gives literate prose and code comparable
+% room without tying the generated document to one publication trim size.
+\geometry{
+  letterpaper,
+  textwidth=6.5in,
+  textheight=8.7in,
+  centering
+}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue,
+  pdfborder={0 0 0}
+}
+\emergencystretch=3em
+
+\newcommand{\LitwebSection}[2]{%
+  \Needspace*{4\baselineskip}\par\medskip\noindent\hypertarget{#1}{}\textbf{#2.}\ }
+\newcommand{\LitwebSectionTitle}[1]{\textbf{#1}\ }
+\newcommand{\LitwebCodeTitle}[1]{%
+  \Needspace*{6\baselineskip}\par\smallskip\noindent #1\par\nopagebreak[4]%
+  \vspace{\smallskipamount}\nopagebreak[4]}
+\newcommand{\LitwebSeeAlso}[1]{%
+  \par\noindent\textit{#1}\par}
+\newcommand{\LitwebIdentifierDefinition}[1]{\underline{#1}}
+\newcommand{\LitwebBackslash}{\textbackslash{}}
+\newcommand{\LitwebLeftBrace}{\textbraceleft{}}
+\newcommand{\LitwebRightBrace}{\textbraceright{}}
+\newcommand{\LitwebCodeLocation}[3]{\hyperlink{litweb-#1-#2}{#3}}
+
+% Major literate chapters have an explicit lifecycle. Ending a chapter first
+% completes its right-hand page. The selected opening policy then either starts
+% immediately on the next left page or supplies that blank left page and starts
+% on the following right page. Ordinary \chapter commands keep the class's
+% usual open-right policy outside literate material.
+\makeatletter
+\newif\ifLitweb@chaptersopenright
+\Litweb@chaptersopenrighttrue
+\newcommand{\LitwebChaptersOpenRight}{\Litweb@chaptersopenrighttrue}
+\newcommand{\LitwebChaptersOpenLeft}{\Litweb@chaptersopenrightfalse}
+
+\def\Litweb@blankpage{%
+  \hbox{}\thispagestyle{empty}\newpage}
+
+% Before \mainmatter resets the page counter, make the physical page facing
+% the first right-opening chapter blank. Left-opening mode performs its
+% padding after the reset in \LitwebLiterateChapter.
+\newcommand{\LitwebPrepareLiterateMainMatter}{%
+  \ifLitweb@chaptersopenright
+    \clearpage
+    \ifodd\c@page
+      \Litweb@blankpage
+    \fi
+    \Litweb@blankpage
+  \fi}
+
+\newcommand{\LitwebLiterateChapter}[2][]{%
+  \clearpage
+  \ifLitweb@chaptersopenright
+    \ifodd\c@page\else
+      \Litweb@blankpage
+    \fi
+  \else
+    \ifodd\c@page
+      \Litweb@blankpage
+    \fi
+  \fi
+  \if@openright
+    \@openrightfalse
+    \chapter[#1]{#2}%
+    \@openrighttrue
+  \else
+    \chapter[#1]{#2}%
+  \fi}
+
+\newcommand{\LitwebLiterateChapterEnd}{%
+  \clearpage
+  \ifodd\c@page
+    \Litweb@blankpage
+  \fi
+  % A later \chapter may flush this empty pending left page before it can
+  % select its own page style. Keep that transition page genuinely blank.
+  \thispagestyle{empty}}
+\makeatother
+
+% A separate e-TeX mark class records uses and definitions of each meaning.
+% Prose uses vertical adjustments; target-code lines carry an invisible prefix
+% that the marked verbatim environment removes before making the visible line.
+\makeatletter
+\newcount\Litweb@meaningcount
+\def\Litweb@nameend{\Litweb@nameend}
+\def\Litweb@breakname#1{%
+  \ifx#1\Litweb@nameend
+    \let\Litweb@next\relax
+  \else
+    #1\allowbreak{}%
+    \let\Litweb@next\Litweb@breakname
+  \fi
+  \Litweb@next}
+\newcommand{\LitwebMiniIndexName}[1]{%
+  \texttt{\Litweb@breakname#1\Litweb@nameend}}
+\newcommand{\LitwebDeclareMiniIndexMeaning}[2]{%
+  \global\Litweb@meaningcount=#1\relax
+  \expandafter\gdef\csname Litweb@entry@#1\endcsname{#2}%
+  \expandafter\newmarks\csname Litweb@usemarks@#1\endcsname
+  \expandafter\newmarks\csname Litweb@defmarks@#1\endcsname
+  \expandafter\gdef\csname Litweb@leftuse@#1\endcsname{0}%
+  \expandafter\gdef\csname Litweb@leftdef@#1\endcsname{0}%
+}
+\newcommand{\LitwebMiniUse}[1]{%
+  \vadjust{\marks\csname Litweb@usemarks@#1\endcsname{1}}}
+\newcommand{\LitwebMiniDefinition}[1]{%
+  \vadjust{\marks\csname Litweb@defmarks@#1\endcsname{1}}}
+\newcommand{\LitwebMiniBlockUse}[1]{%
+  \marks\csname Litweb@usemarks@#1\endcsname{1}}
+\def\LitwebCodeUse#1{%
+  \marks\csname Litweb@usemarks@#1\endcsname{1}}
+\def\LitwebCodeDefinition#1{%
+  \marks\csname Litweb@defmarks@#1\endcsname{1}}
+
+\newtoks\Litweb@savedoutput
+\newbox\Litweb@trial
+\newbox\Litweb@body
+\newbox\Litweb@mini
+\newbox\Litweb@columnA
+\newbox\Litweb@columnB
+\newbox\Litweb@columnC
+\newdimen\Litweb@reserve
+\newdimen\Litweb@bodydepth
+\newdimen\Litweb@columnwidth
+\newcount\Litweb@selectedcount
+\newcount\Litweb@usepresent
+\newcount\Litweb@defpresent
+\newcount\Litweb@rows
+\newcount\Litweb@selectedposition
+\newcount\Litweb@firstselected
+\newcount\Litweb@lastselected
+\newcount\Litweb@trialiterations
+\newif\ifLitweb@selected
+\newif\ifLitweb@leftpending
+\def\Litweb@one{1}
+
+\def\Litweb@setselected#1{%
+  \Litweb@selectedfalse
+  \Litweb@usepresent=\csname Litweb@leftuse@#1\endcsname\relax
+  \edef\Litweb@markvalue{%
+    \splitbotmarks\csname Litweb@usemarks@#1\endcsname}%
+  \ifx\Litweb@markvalue\Litweb@one\Litweb@usepresent=1\relax\fi
+  \Litweb@defpresent=\csname Litweb@leftdef@#1\endcsname\relax
+  \edef\Litweb@markvalue{%
+    \splitbotmarks\csname Litweb@defmarks@#1\endcsname}%
+  \ifx\Litweb@markvalue\Litweb@one\Litweb@defpresent=1\relax\fi
+  \ifnum\Litweb@usepresent=1\relax
+    \ifnum\Litweb@defpresent=0\relax\Litweb@selectedtrue\fi
+  \fi
+}
+
+\def\Litweb@countselected{%
+  \Litweb@selectedcount=0\relax
+  \@tempcnta=1\relax
+  \loop\ifnum\@tempcnta<\numexpr\Litweb@meaningcount+1\relax
+    \Litweb@setselected{\the\@tempcnta}%
+    \ifLitweb@selected\advance\Litweb@selectedcount by1\relax\fi
+    \advance\@tempcnta by1\relax
+  \repeat
+}
+
+\def\Litweb@emitselectedrange#1#2{%
+  \Litweb@selectedposition=0\relax
+  \@tempcnta=1\relax
+  \loop\ifnum\@tempcnta<\numexpr\Litweb@meaningcount+1\relax
+    \Litweb@setselected{\the\@tempcnta}%
+    \ifLitweb@selected
+      \advance\Litweb@selectedposition by1\relax
+      \ifnum\Litweb@selectedposition<#1\relax\else
+        \ifnum\Litweb@selectedposition>#2\relax\else
+          \noindent\hangindent=1em\relax
+          \csname Litweb@entry@\the\@tempcnta\endcsname\par
+        \fi
+      \fi
+    \fi
+    \advance\@tempcnta by1\relax
+  \repeat
+}
+
+\def\Litweb@buildcolumn#1#2#3{%
+  \setbox#1=\vtop{%
+    \footnotesize
+    \hsize=\Litweb@columnwidth
+    \rightskip=0pt plus 1fil\relax
+    \parfillskip=0pt\relax
+    \parindent=0pt\relax
+    \pretolerance=10000\relax
+    \hyphenpenalty=10000\relax
+    \exhyphenpenalty=10000\relax
+    \Litweb@emitselectedrange{#2}{#3}}%
+}
+
+\def\Litweb@buildmini{%
+  \Litweb@countselected
+  \ifnum\Litweb@selectedcount=0\relax
+    \setbox\Litweb@mini=\box\voidb@x
+  \else
+    \Litweb@rows=\Litweb@selectedcount
+    \advance\Litweb@rows by2\relax
+    \divide\Litweb@rows by3\relax
+    \Litweb@columnwidth=\textwidth
+    \advance\Litweb@columnwidth by-2em\relax
+    \divide\Litweb@columnwidth by3\relax
+    \Litweb@firstselected=1\relax
+    \Litweb@lastselected=\Litweb@rows
+    \Litweb@buildcolumn\Litweb@columnA
+      {\the\Litweb@firstselected}{\the\Litweb@lastselected}%
+    \advance\Litweb@firstselected by\Litweb@rows
+    \advance\Litweb@lastselected by\Litweb@rows
+    \Litweb@buildcolumn\Litweb@columnB
+      {\the\Litweb@firstselected}{\the\Litweb@lastselected}%
+    \advance\Litweb@firstselected by\Litweb@rows
+    \advance\Litweb@lastselected by\Litweb@rows
+    \Litweb@buildcolumn\Litweb@columnC
+      {\the\Litweb@firstselected}{\the\Litweb@lastselected}%
+    \setbox\Litweb@mini=\vbox{%
+      \footnotesize
+      \hrule\vskip5pt
+      \hbox to\textwidth{%
+        \box\Litweb@columnA\hfil
+        \box\Litweb@columnB\hfil
+        \box\Litweb@columnC}}%
+    % The vtop columns place most of a tall mini-index below their baseline.
+    % Move that depth above the baseline before this becomes the final box on
+    % the page; otherwise it extends below the reserved \textheight.
+    \@tempdima=\dp\Litweb@mini
+    \setbox\Litweb@mini=\hbox{%
+      \raise\@tempdima\box\Litweb@mini}%
+  \fi
+}
+
+\def\Litweb@trialright{%
+  \setbox\Litweb@trial=\copy\@cclv
+  \@tempdima=\textheight
+  \advance\@tempdima by-\Litweb@reserve
+  \ifdim\@tempdima<4\baselineskip
+    \PackageError{litweb}{Mini-index leaves no room for page body}%
+      {Reduce the number or length of mini-index entries.}%
+    \@tempdima=4\baselineskip
+  \fi
+  \@tempcntb=\vbadness
+  \vbadness=10000
+  \setbox\Litweb@body=\vsplit\Litweb@trial to\@tempdima
+  \vbadness=\@tempcntb
+  \Litweb@bodydepth=\dp\Litweb@body
+  \Litweb@buildmini
+  \ifvoid\Litweb@mini
+    \@tempdima=0pt\relax
+  \else
+    \@tempdima=\ht\Litweb@mini
+    \advance\@tempdima by\dp\Litweb@mini
+    % Leave half a body-text line between the page body and the rule. This
+    % scales with the selected document font size and resembles CWEB's
+    % separation without wasting a complete line.
+    \advance\@tempdima by.5\baselineskip
+  \fi
+  % A split body can retain depth below its baseline. The shipped body moves
+  % that depth above the baseline without unpacking the box, so reserve it
+  % even when this spread has no mini-index entries.
+  \advance\@tempdima by\Litweb@bodydepth
+  \ifdim\@tempdima>\Litweb@reserve
+    \Litweb@reserve=\@tempdima
+    \advance\Litweb@trialiterations by1\relax
+    \ifnum\Litweb@trialiterations<100\relax
+      \expandafter\Litweb@trialright
+    \else
+      \PackageError{litweb}{Mini-index pagination did not converge}%
+        {Shorten unusually long mini-index entries.}%
+    \fi
+  \fi
+}
+
+\def\Litweb@rememberleft{%
+  \@tempcnta=1\relax
+  \loop\ifnum\@tempcnta<\numexpr\Litweb@meaningcount+1\relax
+    \edef\Litweb@markvalue{%
+      \botmarks\csname Litweb@usemarks@\the\@tempcnta\endcsname}%
+    \expandafter\xdef\csname Litweb@leftuse@\the\@tempcnta\endcsname{%
+      \ifx\Litweb@markvalue\Litweb@one1\else0\fi}%
+    \edef\Litweb@markvalue{%
+      \botmarks\csname Litweb@defmarks@\the\@tempcnta\endcsname}%
+    \expandafter\xdef\csname Litweb@leftdef@\the\@tempcnta\endcsname{%
+      \ifx\Litweb@markvalue\Litweb@one1\else0\fi}%
+    \advance\@tempcnta by1\relax
+  \repeat
+  \global\Litweb@leftpendingtrue
+}
+
+\def\Litweb@resetmarks{%
+  \@tempcnta=1\relax
+  \loop\ifnum\@tempcnta<\numexpr\Litweb@meaningcount+1\relax
+    \marks\csname Litweb@usemarks@\the\@tempcnta\endcsname{0}%
+    \marks\csname Litweb@defmarks@\the\@tempcnta\endcsname{0}%
+    \advance\@tempcnta by1\relax
+  \repeat
+}
+
+\def\Litweb@clearleft{%
+  \@tempcnta=1\relax
+  \loop\ifnum\@tempcnta<\numexpr\Litweb@meaningcount+1\relax
+    \expandafter\gdef\csname Litweb@leftuse@\the\@tempcnta\endcsname{0}%
+    \expandafter\gdef\csname Litweb@leftdef@\the\@tempcnta\endcsname{0}%
+    \advance\@tempcnta by1\relax
+  \repeat
+  \global\Litweb@leftpendingfalse
+}
+
+% Current LaTeX releases keep named running-head marks in a structured cache
+% that the ordinary output routine updates before shipping. Since Litweb
+% splits each page before composing it, first carry the split marks into that
+% cache. The second update reads the finished output box and advances the
+% cache normally. Older releases simply continue to use TeX's page marks.
+\def\Litweb@updatesplitmarks{%
+  \@ifundefined{__mark_update_structure_from_splitmarks:n}{}{%
+    \csname __mark_update_structure_from_splitmarks:n\endcsname{page}}}
+
+\def\Litweb@outputpage{%
+  \@ifundefined{@expl@@@mark@update@singlecol@structures@@}{}{%
+    \@expl@@@mark@update@singlecol@structures@@}%
+  \@outputpage}
+
+\def\Litweb@shipleft{%
+  \Litweb@rememberleft
+  % A disposable copy exposes this page's split marks to LaTeX without
+  % repacking the settled page that will actually be shipped.
+  \setbox\Litweb@trial=\copy\@cclv
+  \@tempdima=\ht\Litweb@trial
+  \@tempcntb=\vbadness
+  \vbadness=10000
+  \setbox\Litweb@body=\vsplit\Litweb@trial to\@tempdima
+  \vbadness=\@tempcntb
+  \Litweb@updatesplitmarks
+  \@tempdima=\dp\@cclv
+  \setbox\@outputbox=\vbox to\textheight{%
+    \unvbox\@cclv\vskip-\@tempdima\vfil}%
+  \Litweb@outputpage
+  \Litweb@resetmarks
+}
+
+\def\Litweb@shipright{%
+  \Litweb@reserve=0pt\relax
+  \Litweb@trialiterations=0\relax
+  \Litweb@trialright
+  \@tempdima=\textheight
+  \advance\@tempdima by-\Litweb@reserve
+  \@tempcntb=\vbadness
+  \vbadness=10000
+  \setbox\Litweb@body=\vsplit\@cclv to\@tempdima
+  \vbadness=\@tempcntb
+  \Litweb@updatesplitmarks
+  \@tempdimb=\dp\Litweb@body
+  % Keep the split box intact: unpacking it would discard TeX's glue setting
+  % and could make its visible contents taller than the measured page body.
+  \setbox\Litweb@body=\hbox{%
+    \raise\@tempdimb\box\Litweb@body}%
+  \Litweb@buildmini
+  \setbox\@outputbox=\vbox to\textheight{%
+    \box\Litweb@body\vfil\box\Litweb@mini}%
+  \Litweb@outputpage
+  \Litweb@clearleft
+  \Litweb@resetmarks
+  \ifvoid\@cclv\else\unvbox\@cclv\fi
+}
+
+\def\Litweb@output{%
+  \ifodd\c@page
+    \Litweb@shipright
+  \else
+    \Litweb@shipleft
+  \fi
+}
+
+\newcommand{\LitwebMiniIndexBegin}{%
+  \Litweb@savedoutput=\expandafter{\the\output}%
+  \Litweb@clearleft
+  \output={\Litweb@output}%
+}
+
+\def\Litweb@flushremaining{%
+  \ifdim\pagetotal>0pt\relax
+    \vfill\penalty-10000\relax
+    \expandafter\Litweb@flushremaining
+  \fi
+}
+
+\def\Litweb@countleftselected{%
+  \Litweb@selectedcount=0\relax
+  \@tempcnta=1\relax
+  \loop\ifnum\@tempcnta<\numexpr\Litweb@meaningcount+1\relax
+    \Litweb@usepresent=\csname Litweb@leftuse@\the\@tempcnta\endcsname\relax
+    \Litweb@defpresent=\csname Litweb@leftdef@\the\@tempcnta\endcsname\relax
+    \ifnum\Litweb@usepresent=1\relax
+      \ifnum\Litweb@defpresent=0\relax
+        \advance\Litweb@selectedcount by1\relax
+      \fi
+    \fi
+    \advance\@tempcnta by1\relax
+  \repeat
+}
+
+\newcommand{\LitwebMiniIndexEnd}{%
+  \par\Litweb@flushremaining
+  \ifLitweb@leftpending
+    \Litweb@countleftselected
+    \ifnum\Litweb@selectedcount>0\relax
+      \null\vfill\penalty-10000\relax
+    \else
+      \Litweb@clearleft
+    \fi
+  \fi
+  \output=\expandafter{\the\Litweb@savedoutput}%
+}
+\makeatother
+
+\DefineVerbatimEnvironment{LitwebCode}{Verbatim}{
+  breaklines=true,
+  breakanywhere=true,
+  breaksymbolleft=\raisebox{0.15ex}{\scriptsize$\hookrightarrow$},
+  breaksymbolindentleft=0pt,
+  breaksymbolsepleft=0.5em,
+  commandchars=\\\{\},
+  fontsize=\small,
+  vspace=\smallskipamount
+}
+
+% Process target-code lines directly instead of letting fancyvrb delay one
+% line for widow handling. This leaves each page mark immediately before, and
+% inseparable from, the source line whose invisible prefix supplied it. The
+% first three lines also stay together, so a named-block title cannot be left
+% behind when the mini-index output routine shortens a right-hand page.
+\makeatletter
+\newcount\Litweb@codelinecount
+\def\Litweb@MarkedCodeFormatting{%
+  \Litweb@codelinecount=0\relax
+  \let\FV@ProcessLine\Litweb@ProcessMarkedCodeLine}
+\def\Litweb@ProcessMarkedCodeLine#1{%
+  \advance\Litweb@codelinecount by 1\relax
+  \ifnum\Litweb@codelinecount>1
+    \ifnum\Litweb@codelinecount<4
+      \penalty\@M
+    \else
+      \penalty\interlinepenalty
+    \fi
+  \fi
+  \Litweb@FormatMarkedCodeLine#1\Litweb@EndMarkedCodeLine}
+\def\Litweb@FormatMarkedCodeLine\LitwebCodeLine#1#2#3\Litweb@EndMarkedCodeLine{%
+  #1#2\nobreak
+  \FV@ListProcessLine{#3}}
+
+\DefineVerbatimEnvironment{LitwebMarkedCode}{Verbatim}{
+  breaklines=true,
+  breakanywhere=true,
+  breaksymbolleft=\raisebox{0.15ex}{\scriptsize$\hookrightarrow$},
+  breaksymbolindentleft=0pt,
+  breaksymbolsepleft=0.5em,
+  commandchars=\\\{\},
+  fontsize=\small,
+  formatcom=\Litweb@MarkedCodeFormatting,
+  vspace=\smallskipamount
+}
+\makeatother
+
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\newcolumntype{C}{>{\centering\arraybackslash}X}
+\newcolumntype{R}{>{\raggedleft\arraybackslash}X}

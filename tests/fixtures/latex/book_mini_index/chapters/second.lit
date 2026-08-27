@@ -1,0 +1,52 @@
+@title Second Major Chapter
+
+@s The later definition
+
+--- src/second.rs
+pub struct FutureDefinition;
+---
+
+@s Names from an earlier chapter
+
+This chapter first uses @code{EarlierDefinition} and @code{AlphaAnchor}. It
+then uses @code{BetaAnchor} and @code{GammaAnchor}. Their declarations are all
+in the first major chapter.
+
+The next group uses @code{DeltaAnchor}, @code{EpsilonAnchor}, and
+@code{EtaAnchor}. A spread prints each meaning once and keeps the entries in
+alphabetical order.
+
+Another calculation uses @code{IotaAnchor} and @code{KappaAnchor}. It also
+uses @code{LambdaAnchor} and @code{ThetaAnchor}. Together these names make a
+full three-column mini-index.
+
+The deliberately long name appears in the code below. Its mini-index entry
+must wrap inside a narrow column without crossing into its neighbor.
+
+--- Exercise the long name
+fn read_long(_: AnExtremelyLongIdentifierThatMustWrapInsideOneMiniIndexColumn) {}
+---
+
+Several ordinary paragraphs now give this major chapter enough body material
+to continue from its opening left page onto the right page of the spread. No
+identifier marker is attached to this paragraph.
+
+The example continues in plain language. Its sentences stay in source order
+if the measured mini-index shortens the right-hand body and returns material
+to TeX for a later page.
+
+A third paragraph adds a few more lines. The chapter heading, source block,
+and explanations together should occupy more than one physical page without
+requiring an authored page-break command.
+
+The fourth paragraph describes a successful operation in ordinary language.
+It exists to make the right-page ending easy to inspect in the compiled test
+document.
+
+The fifth paragraph continues the same explanation. It contains enough words
+to occupy several lines at the ordinary book measure and still reads as a
+coherent part of the fixture.
+
+The sixth paragraph brings the operation to its result. A following major
+chapter must begin on an even-numbered left page after this chapter's final
+spread has been completed.
