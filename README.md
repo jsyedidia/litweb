@@ -13,9 +13,7 @@ before version 1.0.
 
 - **Readable source output.** Litweb expands named blocks with correct
   indentation and useful block-name comments, producing ordinary source files
-  suitable for reading, reviewing, editing, and compiling. It preserves the
-  formatting written in the `.lit` file rather than invoking a
-  language-specific formatter.
+  suitable for reading, reviewing, editing, and compiling.
 - **A complete working example.** The Rust files under [`src/`](src/) were
   tangled directly from the canonical [`lit/`](lit/) book. They are committed
   as normal source, so users can build Litweb without already having `lw`.
