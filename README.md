@@ -20,7 +20,7 @@ before version 1.0.
 - **Language-independent tangling.** A document can generate one or more files
   in Rust, C, Python, or another textual programming language.
 - **Readable literate source.** Markdown-like prose, equations, and named code
-  blocks keep a `.lit` file useful even before it is woven.
+  blocks make a `.lit` file easy to write or read.
 - **Documents and books.** Litweb handles standalone chapters as well as
   ordered, multi-chapter books with navigation and a table of contents.
 - **HTML and LuaLaTeX output.** HTML is self-contained for offline reading and
