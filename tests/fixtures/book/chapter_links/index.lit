@@ -1,0 +1,13 @@
+@book
+@title A Book of Routes
+@code_type rust .rs
+@comment_type // %s
+
+Begin with [The **start**](start.lit), then visit [The map](maps/map.lit).
+
+[Start](start.lit)
+    [Details](routes/details.lit)
+[Route map](routes/map.lit)
+[Map](maps/map.lit)
+[Empty](empty.lit)
+[Names](names/space & %.lit)

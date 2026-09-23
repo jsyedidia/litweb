@@ -1,0 +1,22 @@
+@title Starting Point
+@s Destinations
+
+Go to [The map](maps/map.lit), [The route map](routes/map.lit),
+[Details](routes/details.lit), [Empty](empty.lit), and
+[Names](names/space & %.lit). Return to [This chapter](./start.lit).
+
+- Read [The *map*](maps/map.lit).
+
+Place | Link
+--- | ---
+Map | [Table map](maps/map.lit)
+
+Literal `[Absent](missing.lit)` and @code{[Absent](missing.lit)} stay visible.
+
+```text
+[Absent](missing.lit)
+```
+
+--- link_example.rs
+pub const LINK: &str = "[Absent](missing.lit)";
+---

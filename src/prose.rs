@@ -86,6 +86,7 @@ pub(crate) enum InlineElement {
         label: Vec<InlineElement>,
         target: String,
         active: bool,
+        origin: SourceOrigin,
     },
     BlockReference {
         name: String,
@@ -472,6 +473,7 @@ fn inline_elements_in(
                         source,
                         position + 1..position + 1 + label_end,
                     ),
+                    origin: origin.clone(),
                     active: safe_link_target(&target),
                     target,
                 });

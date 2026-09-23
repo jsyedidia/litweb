@@ -102,6 +102,9 @@ never invokes TeX. Compiling them requires LuaLaTeX, the packages and
 Libertinus and DejaVu fonts normally supplied by a full TeX Live installation,
 and preferably Latexmk to perform the required repeated passes. The generated
 document has internal links, but not HTML navigation bars or syntax colors.
+On a book's Identifier Index continuation pages, the running heading gives
+the book title followed by “Identifier Index,” both in uppercase. The first
+index page retains the usual chapter-opening style.
 
 Recognized mathematics is copied as TeX source so LuaLaTeX can typeset it.
 Authors targeting both formats should use the useful common subset supported
@@ -459,6 +462,38 @@ The three title roles are independent. The manifest's `@title` names the book,
 the link label appears in contents and Previous/Next navigation, and a
 chapter's own `@title` names its page. A chapter without a nonempty title uses
 its manifest label as the page title.
+
+In prose, link to a declared chapter using its source path:
+
+```text
+Continue with [The map](routes/map.lit).
+```
+
+HTML turns this into a relative link to that chapter's `.html` page. LaTeX
+turns it into an internal jump to the chapter heading in the book's single
+PDF, including for minor chapters and chapters with no body. The link's label
+keeps its supported inline formatting.
+
+A prose link is relative to the source file containing it, so a chapter in
+`games/` can refer to `[The map](../routes/map.lit)`. The manifest introduction
+uses the manifest directory. Unlike declaration paths, prose references accept
+`.` and `..` components, provided they stay within the book and resolve to a
+declared chapter. Paths use `/` separators and literal filename characters;
+for example, write a space as a space, not `%20`. Repeated separators, unknown
+chapters, and paths above the book root produce source-located weaving errors
+before output is written. Tangle-only operation does not resolve prose links.
+
+In the manifest, a whole-line `[Label](chapter.lit)` still declares a chapter.
+Use a sentence such as `Read [The map](routes/map.lit) next.` for an ordinary
+introduction reference. Links inside code spans and fenced examples remain
+literal.
+
+Only plain relative targets ending in lowercase `.lit` receive this treatment.
+Explicit `.html` and `.pdf` links, external URLs, absolute paths, backslash
+paths, and targets with queries or fragments keep their ordinary behavior.
+Source links between different books and to particular sections are not
+resolved; use explicit output URLs for those destinations. Standalone input
+also preserves ordinary link targets because it has no declared book chapters.
 
 The safe manifest commands `@code_type` and `@comment_type` provide defaults
 for all chapters. Repeated values use the last declaration, `none` clears a

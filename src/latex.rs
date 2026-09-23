@@ -214,7 +214,7 @@ fn render_document(
     if mini_index.is_some() {
         output.push_str("\\LitwebMiniIndexEnd\n");
     }
-    render_identifier_index(&mut output, identifiers, Some(0), false);
+    render_identifier_index(&mut output, identifiers, Some(0), None);
     output.push_str("\\end{document}\n");
     (output, errors)
 }
@@ -282,14 +282,14 @@ fn render_book_document(
                 }
                 output.push_str("\\LitwebLiterateChapterEnd\n");
             }
-            render_book_chapter_heading(&mut output, chapter, true);
+            render_book_chapter_heading(&mut output, chapter, chapter_index, true);
             if mini_index.is_some() {
                 output.push_str("\\LitwebMiniIndexBegin\n");
                 mini_index_active = true;
             }
             major_chapter_active = true;
         } else {
-            render_book_chapter_heading(&mut output, chapter, false);
+            render_book_chapter_heading(&mut output, chapter, chapter_index, false);
         }
         render_chapter_sections(
             &mut output,
@@ -311,7 +311,7 @@ fn render_book_document(
     if !identifiers.entries.is_empty() {
         output.push_str("\\backmatter\n");
     }
-    render_identifier_index(&mut output, identifiers, None, true);
+    render_identifier_index(&mut output, identifiers, None, Some(&program.title));
     output.push_str("\\end{document}\n");
     (output, errors)
 }
@@ -319,6 +319,7 @@ fn render_book_document(
 fn render_book_chapter_heading(
     output: &mut String,
     chapter: &Chapter,
+    chapter_index: usize,
     literate_boundary: bool,
 ) {
     let metadata = chapter
@@ -333,7 +334,11 @@ fn render_book_chapter_heading(
         "\\section["
     });
     push_latex_text(output, &metadata.navigation_label);
-    output.push_str("]{");
+    let _ = write!(
+        output,
+        "]{{\\hypertarget{{litweb-chapter-{}}}{{}}",
+        chapter_index + 1
+    );
     push_latex_text(output, &chapter.title);
     output.push_str("}\n");
 }
@@ -808,11 +813,32 @@ fn render_inline_elements(
                 label,
                 target,
                 active,
+                origin,
             } => {
                 if *active {
-                    output.push_str("\\href{\\detokenize{");
-                    push_latex_url(output, target);
-                    output.push_str("}}{");
+                    match index.chapter_link(target, requesting_chapter) {
+                        Ok(Some(chapter)) => {
+                            let _ = write!(
+                                output,
+                                "\\hyperlink{{litweb-chapter-{}}}{{",
+                                chapter + 1
+                            );
+                        }
+                        Ok(None) => {
+                            output.push_str("\\href{\\detokenize{");
+                            push_latex_url(output, target);
+                            output.push_str("}}{");
+                        }
+                        Err(()) => {
+                            errors.push(LatexError {
+                                origin: origin.clone(),
+                                kind: LatexErrorKind::InvalidChapterLink {
+                                    target: target.clone(),
+                                },
+                            });
+                            output.push('{');
+                        }
+                    }
                     render_inline_elements(
                         output,
                         label,
@@ -1147,17 +1173,20 @@ fn render_identifier_index(
     output: &mut String,
     index: &LocatedIdentifierIndex,
     current_chapter: Option<usize>,
-    book: bool,
+    book_title: Option<&str>,
 ) {
     if index.entries.is_empty() {
         return;
     }
 
-    if book {
-        output.push_str(concat!(
-            "\\chapter*{Identifier Index}\n",
-            "\\addcontentsline{toc}{chapter}{Identifier Index}\n",
-        ));
+    if let Some(title) = book_title {
+        output.push_str("\\chapter*{Identifier Index}\n\\markboth");
+        for _ in 0..2 {
+            output.push_str("{\\MakeUppercase{");
+            push_latex_text(output, title);
+            output.push_str(" --- Identifier Index}}");
+        }
+        output.push_str("\n\\addcontentsline{toc}{chapter}{Identifier Index}\n");
     } else {
         output.push_str("\\section*{Identifier Index}\n");
     }
@@ -1261,6 +1290,9 @@ pub struct LatexError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LatexErrorKind {
     InvalidOutputName,
+    InvalidChapterLink {
+        target: String,
+    },
     UndefinedBlock {
         name: String,
     },
@@ -1277,6 +1309,10 @@ impl fmt::Display for LatexError {
             LatexErrorKind::InvalidOutputName => {
                 formatter.write_str("the input path has no usable LaTeX output name")
             }
+            LatexErrorKind::InvalidChapterLink { target } => write!(
+                formatter,
+                "chapter link {target} does not name a declared chapter in this book"
+            ),
             LatexErrorKind::UndefinedBlock { name } => {
                 write!(formatter, "code block {{{name}}} is not defined")
             }

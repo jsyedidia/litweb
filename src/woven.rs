@@ -2,6 +2,7 @@
 //! Presentation sections and relationships shared by output backends.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::identifier::{IdentifierIndex, IdentifierKind, IdentifierRole};
 use crate::parser::{BlockKind, Modifier, Program, SourceOrigin};
@@ -178,6 +179,47 @@ pub(crate) struct BlockLocations {
 pub(crate) struct WeaveIndex {
     pub blocks: HashMap<usize, BlockLocations>,
     pub roots: HashSet<usize>,
+    chapter_paths: Option<Vec<PathBuf>>,
+}
+
+// Resolve book chapter links
+impl WeaveIndex {
+    pub fn chapter_link(
+        &self,
+        target: &str,
+        requesting_chapter: Option<usize>,
+    ) -> Result<Option<usize>, ()> {
+        let Some(paths) = &self.chapter_paths else {
+            return Ok(None);
+        };
+        if !target.ends_with(".lit")
+            || target.starts_with('/')
+            || target.contains([':', '?', '#', '\\'])
+        {
+            return Ok(None);
+        }
+        let mut path = requesting_chapter
+            .and_then(|chapter| paths[chapter].parent())
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .to_path_buf();
+        for component in target.split('/') {
+            match component {
+                "" => return Err(()),
+                "." => {}
+                ".." => {
+                    if !path.pop() {
+                        return Err(());
+                    }
+                }
+                name => path.push(name),
+            }
+        }
+        paths
+            .iter()
+            .position(|candidate| *candidate == path)
+            .map(Some)
+            .ok_or(())
+    }
 }
 
 // Located identifier index
@@ -402,7 +444,25 @@ pub(crate) fn collect_locations(
         }
     }
 
-    WeaveIndex { blocks, roots }
+    let chapter_paths = program.book().map(|_| {
+        program
+            .chapters
+            .iter()
+            .map(|chapter| {
+                chapter
+                    .book
+                    .as_ref()
+                    .expect("book chapter")
+                    .source_path
+                    .clone()
+            })
+            .collect()
+    });
+    WeaveIndex {
+        blocks,
+        roots,
+        chapter_paths,
+    }
 }
 
 fn push_unique(locations: &mut Vec<SectionLocation>, location: SectionLocation) {

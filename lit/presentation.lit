@@ -1328,9 +1328,10 @@ impl std::error::Error for WeavePlanError {}
 
 Each @code{WeaveErrorKind} names the fact that failed: output naming,
 identifier-page or asset-path selection, theme selection or reading, or a
-visible named-block reference. @code{WeaveError} pairs that fact with its
-source origin. The aggregate exposes the full list to library callers while
-its display form reports the first error and the number that remain.
+visible chapter link or named-block reference. @code{WeaveError} pairs that
+fact with its source origin. The aggregate exposes the full list to library
+callers while its display form reports the first error and the number that
+remain.
 
 --- Weave errors
 
@@ -1343,6 +1344,9 @@ pub struct WeaveError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WeaveErrorKind {
     InvalidOutputName,
+    InvalidChapterLink {
+        target: String,
+    },
     ContentsPathCollision {
         path: PathBuf,
     },
@@ -1422,6 +1426,10 @@ impl fmt::Display for WeaveError {
                 f,
                 "color scheme {} is not UTF-8 at byte {valid_up_to}",
                 path.display()
+            ),
+            WeaveErrorKind::InvalidChapterLink { target } => write!(
+                f,
+                "chapter link {target} does not name a declared chapter in this book"
             ),
             WeaveErrorKind::UndefinedBlock { name } => {
                 write!(f, "code block {{{name}}} is not defined")

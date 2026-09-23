@@ -80,6 +80,9 @@ pub struct WeaveError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WeaveErrorKind {
     InvalidOutputName,
+    InvalidChapterLink {
+        target: String,
+    },
     ContentsPathCollision {
         path: PathBuf,
     },
@@ -159,6 +162,10 @@ impl fmt::Display for WeaveError {
                 f,
                 "color scheme {} is not UTF-8 at byte {valid_up_to}",
                 path.display()
+            ),
+            WeaveErrorKind::InvalidChapterLink { target } => write!(
+                f,
+                "chapter link {target} does not name a declared chapter in this book"
             ),
             WeaveErrorKind::UndefinedBlock { name } => {
                 write!(f, "code block {{{name}}} is not defined")
@@ -1713,10 +1720,27 @@ fn render_inline_elements(
                 label,
                 target,
                 active,
+                origin,
             } => {
                 if *active {
                     output.push_str("<a href=\"");
-                    push_escaped_attribute(output, target);
+                    match index.chapter_link(target, context.current_chapter) {
+                        Ok(Some(chapter)) => {
+                            let paths = context.book_paths.expect("book link paths");
+                            let url = relative_url(
+                                context.current_path,
+                                &paths.chapters[chapter],
+                            );
+                            push_escaped_attribute(output, &url);
+                        }
+                        Ok(None) => push_escaped_attribute(output, target),
+                        Err(()) => errors.push(WeaveError {
+                            origin: origin.clone(),
+                            kind: WeaveErrorKind::InvalidChapterLink {
+                                target: target.clone(),
+                            },
+                        }),
+                    }
                     output.push_str("\">");
                     render_inline_elements(
                         output, label, context, resolved, index, errors,

@@ -892,7 +892,14 @@ targets remain visible bracketed text instead of becoming active links.
 
 Prose now turns that located scope into backend-neutral inline elements.
 Recursive recognition has therefore already preserved the physical origin of
-a nested named-block reference before this HTML renderer sees it.
+a nested link or named-block reference before this HTML renderer sees it.
+
+For a book link such as `[The map](../maps/map.lit)`, the shared relationship
+index selects the declared chapter. Book Weaving then supplies its planned
+HTML page path, and `relative_url` expresses that path from the current page.
+The label follows the same recursive rendering as any ordinary link. Other
+safe targets keep their authored URL. A missing chapter becomes a located
+error, so the incomplete page is discarded before output is written.
 
 --- Scan inline Markdown
 fn render_inline(
@@ -973,10 +980,27 @@ fn render_inline_elements(
                 label,
                 target,
                 active,
+                origin,
             } => {
                 if *active {
                     output.push_str("<a href=\"");
-                    push_escaped_attribute(output, target);
+                    match index.chapter_link(target, context.current_chapter) {
+                        Ok(Some(chapter)) => {
+                            let paths = context.book_paths.expect("book link paths");
+                            let url = relative_url(
+                                context.current_path,
+                                &paths.chapters[chapter],
+                            );
+                            push_escaped_attribute(output, &url);
+                        }
+                        Ok(None) => push_escaped_attribute(output, target),
+                        Err(()) => errors.push(WeaveError {
+                            origin: origin.clone(),
+                            kind: WeaveErrorKind::InvalidChapterLink {
+                                target: target.clone(),
+                            },
+                        }),
+                    }
                     output.push_str("\">");
                     render_inline_elements(
                         output, label, context, resolved, index, errors,

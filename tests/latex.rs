@@ -154,6 +154,72 @@ fn standalone_latex_is_deterministic_and_can_omit_the_identifier_index() {
     assert!(!latex.contains("LitwebMiniUse"));
     assert!(!latex.contains("LitwebCodeLine"));
     assert!(!latex.contains("LitwebMarkedCode"));
+    assert!(!latex.contains("\\markboth"));
+}
+
+#[test]
+fn book_index_running_headings_use_the_escaped_book_title_after_the_page_break() {
+    let mut book = load_book(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/book/rust_shape/index.lit"),
+    )
+    .unwrap();
+    book.title = "Routes & Rivers: 50% #1_{Guide} \\ Notes".to_owned();
+    let heading = concat!(
+        "{\\MakeUppercase{Routes \\& Rivers: 50\\% \\#1\\_\\{Guide\\} ",
+        "\\textbackslash{} Notes --- Identifier Index}}"
+    );
+    let expected = format!(
+        "\\chapter*{{Identifier Index}}\n\\markboth{heading}{heading}\n\
+         \\addcontentsline{{toc}}{{chapter}}{{Identifier Index}}\n"
+    );
+    for chapter_opening in [LatexChapterOpening::Left, LatexChapterOpening::Right] {
+        let plan = plan_latex_with_options(
+            &book,
+            LatexOptions {
+                chapter_opening,
+                ..LatexOptions::default()
+            },
+        )
+        .unwrap();
+        let latex = String::from_utf8(plan.outputs[0].bytes.clone()).unwrap();
+        assert!(latex.contains(&expected), "missing {expected}");
+        let index_start = latex.find("\\backmatter").unwrap();
+        assert!(!latex[..index_start].contains("\\markboth"));
+        assert_eq!(latex.matches("\\markboth").count(), 1);
+        assert!(latex.contains("\\hyperlink{litweb-1-1}{1}"));
+    }
+
+    let no_index = plan_latex_with_options(
+        &book,
+        LatexOptions {
+            identifier_index: false,
+            ..LatexOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        !String::from_utf8(no_index.outputs[0].bytes.clone())
+            .unwrap()
+            .contains("\\markboth")
+    );
+
+    let directory = TestDirectory::new("empty-index-headings");
+    fs::write(
+        directory.path().join("index.lit"),
+        "@book\n@title Empty Index\n[One](one.lit)\n",
+    )
+    .unwrap();
+    fs::write(directory.path().join("one.lit"), "@title One\n").unwrap();
+    let empty_book = load_book(directory.path().join("index.lit")).unwrap();
+    let empty_index = plan_latex(&empty_book).unwrap();
+    let latex = String::from_utf8(empty_index.outputs[0].bytes.clone()).unwrap();
+    assert!(!latex.contains("Identifier Index"));
+    assert!(!latex.contains("\\markboth"));
+    let standalone = standalone_plan();
+    let latex = String::from_utf8(standalone.outputs[0].bytes.clone()).unwrap();
+    assert!(latex.contains("\\section*{Identifier Index}"));
+    assert!(!latex.contains("\\markboth"));
 }
 
 #[test]
@@ -272,14 +338,16 @@ fn a_book_uses_one_document_with_front_matter_chapter_hierarchy_and_index() {
     assert!(latex.contains(
         "\\tableofcontents\n\\LitwebPrepareLiterateMainMatter\n\\mainmatter\n"
     ));
-    assert!(latex.contains("\\LitwebLiterateChapter[Library]{Library Internals}"));
-    assert!(latex.contains("\\section[Helpers]{Helpers}"));
-    assert!(latex.contains("\\LitwebLiterateChapter[Application]{Application Page}"));
+    assert!(latex.contains("\\LitwebLiterateChapter[Library]{\\hypertarget{litweb-chapter-1}{}Library Internals}"));
+    assert!(
+        latex.contains("\\section[Helpers]{\\hypertarget{litweb-chapter-2}{}Helpers}")
+    );
+    assert!(latex.contains("\\LitwebLiterateChapter[Application]{\\hypertarget{litweb-chapter-3}{}Application Page}"));
     assert_eq!(latex.matches("\\LitwebMiniIndexBegin\n").count(), 2);
     assert_eq!(latex.matches("\\LitwebMiniIndexEnd\n").count(), 2);
     assert_eq!(latex.matches("\\LitwebLiterateChapterEnd\n").count(), 2);
     assert!(latex.contains(
-        "\\LitwebMiniIndexEnd\n\\LitwebLiterateChapterEnd\n\\LitwebLiterateChapter[Application]{Application Page}\n\\LitwebMiniIndexBegin\n"
+        "\\LitwebMiniIndexEnd\n\\LitwebLiterateChapterEnd\n\\LitwebLiterateChapter[Application]{\\hypertarget{litweb-chapter-3}{}Application Page}\n\\LitwebMiniIndexBegin\n"
     ));
     assert!(latex.contains("\\LitwebSection{litweb-2-1}{1}"));
     assert!(latex.contains("\\backmatter\n\\chapter*{Identifier Index}"));
@@ -327,11 +395,14 @@ fn a_book_uses_one_document_with_front_matter_chapter_hierarchy_and_index() {
         2
     );
     assert!(
-        without_index.contains("\\LitwebLiterateChapter[Library]{Library Internals}")
+        without_index.contains("\\LitwebLiterateChapter[Library]{\\hypertarget{litweb-chapter-1}{}Library Internals}")
     );
-    assert!(without_index.contains("\\section[Helpers]{Helpers}"));
     assert!(
-        without_index.contains("\\LitwebLiterateChapter[Application]{Application Page}")
+        without_index
+            .contains("\\section[Helpers]{\\hypertarget{litweb-chapter-2}{}Helpers}")
+    );
+    assert!(
+        without_index.contains("\\LitwebLiterateChapter[Application]{\\hypertarget{litweb-chapter-3}{}Application Page}")
     );
 }
 
@@ -368,15 +439,17 @@ fn book_mini_indexes_follow_major_boundaries_but_not_minor_entries() {
     assert_eq!(latex.matches("\\LitwebMiniIndexEnd\n").count(), 3);
     assert_eq!(latex.matches("\\LitwebLiterateChapterEnd\n").count(), 3);
     assert!(latex.contains(
-        "\\LitwebLiterateChapter[First]{First Major Chapter}\n\\LitwebMiniIndexBegin\n"
+        "\\LitwebLiterateChapter[First]{\\hypertarget{litweb-chapter-1}{}First Major Chapter}\n\\LitwebMiniIndexBegin\n"
     ));
-    assert!(latex.contains("\\section[First companion]{First companion}"));
+    assert!(latex.contains(
+        "\\section[First companion]{\\hypertarget{litweb-chapter-2}{}First companion}"
+    ));
     assert!(!latex.contains("\\LitwebLiterateChapter[First companion]"));
     assert!(latex.contains(
-        "\\LitwebMiniIndexEnd\n\\LitwebLiterateChapterEnd\n\\LitwebLiterateChapter[Second]{Second Major Chapter}\n\\LitwebMiniIndexBegin\n"
+        "\\LitwebMiniIndexEnd\n\\LitwebLiterateChapterEnd\n\\LitwebLiterateChapter[Second]{\\hypertarget{litweb-chapter-3}{}Second Major Chapter}\n\\LitwebMiniIndexBegin\n"
     ));
     assert!(latex.contains(
-        "\\LitwebMiniIndexEnd\n\\LitwebLiterateChapterEnd\n\\LitwebLiterateChapter[Third]{Third Major Chapter}\n\\LitwebMiniIndexBegin\n"
+        "\\LitwebMiniIndexEnd\n\\LitwebLiterateChapterEnd\n\\LitwebLiterateChapter[Third]{\\hypertarget{litweb-chapter-4}{}Third Major Chapter}\n\\LitwebMiniIndexBegin\n"
     ));
     assert!(latex.contains(
         "\\LitwebMiniIndexEnd\n\\LitwebLiterateChapterEnd\n\\backmatter\n\\chapter*{Identifier Index}"
@@ -541,8 +614,10 @@ fn cli_generates_one_portable_latex_document_for_a_book() {
     let latex = fs::read_to_string(directory.path().join("book/index.tex")).unwrap();
     assert!(latex.starts_with("\\documentclass[12pt]{book}\n"));
     assert!(latex.contains("\\LitwebChaptersOpenLeft\n"));
-    assert!(latex.contains("\\LitwebLiterateChapter[Library]{Library Internals}"));
-    assert!(latex.contains("\\section[Helpers]{Helpers}"));
+    assert!(latex.contains("\\LitwebLiterateChapter[Library]{\\hypertarget{litweb-chapter-1}{}Library Internals}"));
+    assert!(
+        latex.contains("\\section[Helpers]{\\hypertarget{litweb-chapter-2}{}Helpers}")
+    );
     assert!(latex.contains("\\hyperlink{litweb-1-2}{1.2}"));
     assert!(!latex.contains(env!("CARGO_MANIFEST_DIR")));
     assert!(!latex.contains("reference_repos"));

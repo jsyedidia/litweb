@@ -324,7 +324,7 @@ fn render_document(
     if mini_index.is_some() {
         output.push_str("\\LitwebMiniIndexEnd\n");
     }
-    render_identifier_index(&mut output, identifiers, Some(0), false);
+    render_identifier_index(&mut output, identifiers, Some(0), None);
     output.push_str("\\end{document}\n");
     (output, errors)
 }
@@ -360,6 +360,16 @@ numbers below those headings. A cross-reference prints a qualified number such
 as 2.4 when it leaves the current chapter. The final identifier index lets a
 reader jump to every visible occurrence of a Rust name, with definitions still
 distinguished from uses.
+
+An authored link such as `[The map](../maps/map.lit)` instead names a whole
+chapter. The shared relationship index resolves its source path to a chapter
+position, and LaTeX emits an internal link to `litweb-chapter-N`, where `N`
+is that position plus one. Every book chapter, including a minor or empty
+chapter, receives this separate destination. It sits inside the visible
+heading, after LaTeX has chosen the heading's page. The optional navigation
+label contains no destination, so contents entries and running headings do
+not duplicate the anchor. Presentation-section numbers and page-opening
+choices cannot change the chapter identity.
 
 An indexed Rust book also helps a reader without sending them to the back.
 Recall the example prepared by Woven Document: section 4 on an earlier spread
@@ -433,14 +443,14 @@ fn render_book_document(
                 }
                 output.push_str("\\LitwebLiterateChapterEnd\n");
             }
-            render_book_chapter_heading(&mut output, chapter, true);
+            render_book_chapter_heading(&mut output, chapter, chapter_index, true);
             if mini_index.is_some() {
                 output.push_str("\\LitwebMiniIndexBegin\n");
                 mini_index_active = true;
             }
             major_chapter_active = true;
         } else {
-            render_book_chapter_heading(&mut output, chapter, false);
+            render_book_chapter_heading(&mut output, chapter, chapter_index, false);
         }
         render_chapter_sections(
             &mut output,
@@ -462,7 +472,7 @@ fn render_book_document(
     if !identifiers.entries.is_empty() {
         output.push_str("\\backmatter\n");
     }
-    render_identifier_index(&mut output, identifiers, None, true);
+    render_identifier_index(&mut output, identifiers, None, Some(&program.title));
     output.push_str("\\end{document}\n");
     (output, errors)
 }
@@ -470,6 +480,7 @@ fn render_book_document(
 fn render_book_chapter_heading(
     output: &mut String,
     chapter: &Chapter,
+    chapter_index: usize,
     literate_boundary: bool,
 ) {
     let metadata = chapter
@@ -484,7 +495,11 @@ fn render_book_chapter_heading(
         "\\section["
     });
     push_latex_text(output, &metadata.navigation_label);
-    output.push_str("]{");
+    let _ = write!(
+        output,
+        "]{{\\hypertarget{{litweb-chapter-{}}}{{}}",
+        chapter_index + 1
+    );
     push_latex_text(output, &chapter.title);
     output.push_str("}\n");
 }
@@ -977,6 +992,9 @@ meaning rather than scanning punctuation again:
 
 A rejected active-content link remains visible in its authored
 bracket-and-parenthesis form instead of becoming a command.
+An active book chapter link becomes `\hyperlink` to the dedicated heading
+destination; other safe links retain the ordinary `\href` form. Both paths
+render the same authored label, including its emphasis and code spans.
 
 --- Render LaTeX inline elements
 fn render_inline_elements(
@@ -1036,11 +1054,32 @@ fn render_inline_elements(
                 label,
                 target,
                 active,
+                origin,
             } => {
                 if *active {
-                    output.push_str("\\href{\\detokenize{");
-                    push_latex_url(output, target);
-                    output.push_str("}}{");
+                    match index.chapter_link(target, requesting_chapter) {
+                        Ok(Some(chapter)) => {
+                            let _ = write!(
+                                output,
+                                "\\hyperlink{{litweb-chapter-{}}}{{",
+                                chapter + 1
+                            );
+                        }
+                        Ok(None) => {
+                            output.push_str("\\href{\\detokenize{");
+                            push_latex_url(output, target);
+                            output.push_str("}}{");
+                        }
+                        Err(()) => {
+                            errors.push(LatexError {
+                                origin: origin.clone(),
+                                kind: LatexErrorKind::InvalidChapterLink {
+                                    target: target.clone(),
+                                },
+                            });
+                            output.push('{');
+                        }
+                    }
                     render_inline_elements(
                         output,
                         label,
@@ -1474,22 +1513,40 @@ A standalone chapter receives an unnumbered final section. A book receives
 unnumbered back matter and a table-of-contents entry. Definitions retain their
 stronger visual role, and every printed location is an internal link.
 
+For a book titled `Routes & Rivers`, index continuation pages carry the
+running heading `ROUTES & RIVERS — IDENTIFIER INDEX`. A **mark** is the text
+LaTeX remembers for a running page heading. An unnumbered chapter does not
+replace the preceding chapter's marks by itself, so index rendering explicitly
+sets both the left-page and right-page marks from the book title. This happens
+after the index heading has opened its page; the preceding chapter and any
+blank transition pages keep their existing appearance. The first index page
+retains LaTeX's normal chapter-opening style without a running heading.
+
+The optional book title distinguishes this book treatment from a standalone
+final section. Title text uses the same escaping as ordinary prose, then
+LaTeX uppercases the completed heading. No authored title can introduce a TeX
+command. An empty or disabled index returns before emitting any heading or
+marks.
+
 --- Render the LaTeX identifier index
 fn render_identifier_index(
     output: &mut String,
     index: &LocatedIdentifierIndex,
     current_chapter: Option<usize>,
-    book: bool,
+    book_title: Option<&str>,
 ) {
     if index.entries.is_empty() {
         return;
     }
 
-    if book {
-        output.push_str(concat!(
-            "\\chapter*{Identifier Index}\n",
-            "\\addcontentsline{toc}{chapter}{Identifier Index}\n",
-        ));
+    if let Some(title) = book_title {
+        output.push_str("\\chapter*{Identifier Index}\n\\markboth");
+        for _ in 0..2 {
+            output.push_str("{\\MakeUppercase{");
+            push_latex_text(output, title);
+            output.push_str(" --- Identifier Index}}");
+        }
+        output.push_str("\n\\addcontentsline{toc}{chapter}{Identifier Index}\n");
     } else {
         output.push_str("\\section*{Identifier Index}\n");
     }
@@ -1646,6 +1703,9 @@ pub struct LatexError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LatexErrorKind {
     InvalidOutputName,
+    InvalidChapterLink {
+        target: String,
+    },
     UndefinedBlock {
         name: String,
     },
@@ -1662,6 +1722,10 @@ impl fmt::Display for LatexError {
             LatexErrorKind::InvalidOutputName => {
                 formatter.write_str("the input path has no usable LaTeX output name")
             }
+            LatexErrorKind::InvalidChapterLink { target } => write!(
+                formatter,
+                "chapter link {target} does not name a declared chapter in this book"
+            ),
             LatexErrorKind::UndefinedBlock { name } => {
                 write!(formatter, "code block {{{name}}} is not defined")
             }

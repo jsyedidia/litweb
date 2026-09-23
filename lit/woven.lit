@@ -66,6 +66,7 @@ LaTeX import them instead of deriving separate answers.
 //! Presentation sections and relationships shared by output backends.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::identifier::{IdentifierIndex, IdentifierKind, IdentifierRole};
 use crate::parser::{BlockKind, Modifier, Program, SourceOrigin};
@@ -77,6 +78,7 @@ use crate::util::block_reference;
 @{Weave layout model}
 @{Weave layout implementation}
 @{Woven relationship index model}
+@{Resolve book chapter links}
 @{Located identifier index}
 @{Located mini-index meanings}
 @{Collect weave locations}
@@ -167,7 +169,7 @@ say that sections 3 and 5 add to the base, section 4 replaces it, and section
 1 uses it. Since those links can point forward, preparation derives every
 location before an HTML or LaTeX renderer writes its first section.
 
-@s One Location System for Every Link
+@s One Location System for Section Links
 
 The layout and both indexes share one location system. That agreement is what
 lets a heading, a named-block relationship, and an identifier entry all point
@@ -463,6 +465,69 @@ pub(crate) struct BlockLocations {
 pub(crate) struct WeaveIndex {
     pub blocks: HashMap<usize, BlockLocations>,
     pub roots: HashSet<usize>,
+    chapter_paths: Option<Vec<PathBuf>>,
+}
+---
+
+@s Resolving an Authored Chapter Link
+
+Suppose `routes/start.lit` contains `Read [The map](../maps/map.lit).`
+The containing chapter contributes directory `routes`; the parent component
+removes it, leaving declared source path `maps/map.lit`. That path identifies
+one chapter. HTML will use its page, while LaTeX will use its heading inside
+the combined book. Neither renderer needs to open another source file.
+
+The relationship index retains the manifest-relative paths in chapter order.
+An absent path list means standalone input, where ordinary links keep their
+authored targets. In a book, no requesting chapter means introduction prose
+in the manifest directory. Lookup returns either an ordinary link, a chapter
+position, or an invalid chapter reference. The renderer pairs a failure with
+the inline link's physical source origin.
+
+Only plain relative `.lit` targets opt into this lookup. URL schemes,
+absolute paths, queries, and fragments keep their ordinary link meaning.
+Within a candidate, `.` and `..` are resolved without filesystem access;
+walking above the manifest directory fails. A literal percent sign remains
+part of the filename, not an instruction to decode a URL escape.
+
+--- Resolve book chapter links
+impl WeaveIndex {
+    pub fn chapter_link(
+        &self,
+        target: &str,
+        requesting_chapter: Option<usize>,
+    ) -> Result<Option<usize>, ()> {
+        let Some(paths) = &self.chapter_paths else {
+            return Ok(None);
+        };
+        if !target.ends_with(".lit")
+            || target.starts_with('/')
+            || target.contains([':', '?', '#', '\\'])
+        {
+            return Ok(None);
+        }
+        let mut path = requesting_chapter
+            .and_then(|chapter| paths[chapter].parent())
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .to_path_buf();
+        for component in target.split('/') {
+            match component {
+                "" => return Err(()),
+                "." => {}
+                ".." => {
+                    if !path.pop() {
+                        return Err(());
+                    }
+                }
+                name => path.push(name),
+            }
+        }
+        paths
+            .iter()
+            .position(|candidate| *candidate == path)
+            .map(Some)
+            .ok_or(())
+    }
 }
 ---
 
@@ -716,6 +781,10 @@ base, addition, or replacement; the other scans its lines for uses. A small
 helper keeps each location list unique without disturbing its first-seen
 order.
 
+For books, collection also retains the declared chapter source paths in that
+same chapter order. These paths are the complete lookup namespace for authored
+chapter links, even when a chapter has no presentation sections or identifiers.
+
 --- Collect weave locations
 pub(crate) fn collect_locations(
     program: &Program,
@@ -736,7 +805,25 @@ pub(crate) fn collect_locations(
         }
     }
 
-    WeaveIndex { blocks, roots }
+    let chapter_paths = program.book().map(|_| {
+        program
+            .chapters
+            .iter()
+            .map(|chapter| {
+                chapter
+                    .book
+                    .as_ref()
+                    .expect("book chapter")
+                    .source_path
+                    .clone()
+            })
+            .collect()
+    });
+    WeaveIndex {
+        blocks,
+        roots,
+        chapter_paths,
+    }
 }
 
 fn push_unique(locations: &mut Vec<SectionLocation>, location: SectionLocation) {

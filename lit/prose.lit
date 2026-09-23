@@ -693,9 +693,9 @@ both formats receive the same recognized meaning.
 
 Most variants own their visible contents. Emphasis, strong text, and link
 labels contain another list of elements because the supported inline forms may
-appear inside them. A named-block reference also retains the physical source
-line on which it was written, so a later renderer can report a missing or
-ambiguous name accurately.
+appear inside them. Links and named-block references also retain the physical
+source line on which they were written, so a later renderer can report an
+unknown chapter or a missing or ambiguous block accurately.
 
 --- Inline prose model
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -713,6 +713,7 @@ pub(crate) enum InlineElement {
         label: Vec<InlineElement>,
         target: String,
         active: bool,
+        origin: SourceOrigin,
     },
     BlockReference {
         name: String,
@@ -876,6 +877,7 @@ fn inline_elements_in(
                         source,
                         position + 1..position + 1 + label_end,
                     ),
+                    origin: origin.clone(),
                     active: safe_link_target(&target),
                     target,
                 });
