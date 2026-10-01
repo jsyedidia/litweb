@@ -1472,6 +1472,13 @@ place it below the page body's nominal height even though Litweb had measured
 and reserved it. Moving the same extent above the baseline makes the measured
 height and the shipped page agree at every supported font size.
 
+A page break can occur as the first item of a list begins. At that instant,
+LaTeX's paragraph settings still expect the item's text. Each mini-index column
+therefore starts with `\@parboxrestore`, which gives its box fresh paragraph
+handling before setting the column's font and dimensions. This local reset
+lets the index print its own paragraphs while the interrupted list retains
+its settings for the next page.
+
 The half-line gap is measured from the document's current @code{baselineskip},
 so it grows with the chosen font size. A nearly full page therefore keeps the
 mini-index rule distinct from the final line of prose or code without giving

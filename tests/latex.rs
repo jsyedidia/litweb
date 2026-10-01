@@ -55,6 +55,37 @@ fn standalone_plan() -> litweb::latex::LatexPlan {
 }
 
 #[test]
+#[ignore = "requires LuaLaTeX and the fonts used by the packaged style"]
+fn mini_index_page_break_before_first_list_item_compiles() {
+    for environment in ["itemize", "enumerate"] {
+        let directory = TestDirectory::new(environment);
+        let plan = standalone_plan();
+        write_planned_outputs(&plan.outputs, directory.path(), Path::new("input.lit"))
+            .unwrap();
+        let fixture = include_str!("fixtures/latex/list_page_break/input.tex")
+            .replace("itemize", environment);
+        fs::write(directory.path().join("list.tex"), fixture).unwrap();
+        let output = Command::new("lualatex")
+            .current_dir(directory.path())
+            .args([
+                "-no-shell-escape",
+                "-halt-on-error",
+                "-interaction=nonstopmode",
+                "list.tex",
+            ])
+            .output()
+            .expect("the explicit PDF regression check requires lualatex");
+        assert!(
+            output.status.success(),
+            "{environment}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(directory.path().join("list.pdf").is_file());
+    }
+}
+
+#[test]
 fn standalone_latex_plans_one_document_and_its_packaged_style() {
     let plan = standalone_plan();
     assert_eq!(plan.outputs.len(), 2);

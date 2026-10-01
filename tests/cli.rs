@@ -77,7 +77,7 @@ fn version_is_available_in_long_and_short_forms() {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "Litweb version 0.9.0\n"
+            "Litweb version 0.9.1\n"
         );
         assert!(output.stderr.is_empty());
     }

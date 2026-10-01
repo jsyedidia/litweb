@@ -1,0 +1,15 @@
+\documentclass[12pt]{book}
+\input{litweb-latex/litweb.sty}
+\LitwebDeclareMiniIndexMeaning{1}{An identifier used on this page.}
+\begin{document}
+\LitwebMiniIndexBegin
+\LitwebMiniBlockUse{1}
+A paragraph before the list.\par
+\begin{itemize}
+% Reproduce a page break while the first item's paragraph is still pending.
+\penalty-10000
+\item The first list item follows a page break.
+\item The second item retains the ordinary list layout.
+\end{itemize}
+\LitwebMiniIndexEnd
+\end{document}
